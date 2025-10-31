@@ -4,7 +4,7 @@
 // - 支持 Home/End 翻页、PgUp/PgDn、Cmd +/- 缩放
 //
 #include "../shared/pdf_utils.h"
-#include "pdfium_object_info.h"
+#include "../shared/pdfium_object_info.h"
 #import <Cocoa/Cocoa.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include "public/fpdf_doc.h"
@@ -1889,15 +1889,17 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
       [[NSSplitView alloc] initWithFrame:self.rightPanel.bounds];
   rightSplit.dividerStyle = NSSplitViewDividerStyleThin;
   rightSplit.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  rightSplit.delegate = self; // 设置委托以控制最小宽度
   [rightSplit setVertical:YES]; // 左右分栏：左侧PDF内容，右侧检查器
 
   // 创建PDF内容视图容器
   CGFloat pdfContentWidth =
       self.rightPanel.bounds.size.width -
-      (self.inspectorVisible ? kInspectorWidth : kBookmarkCollapsedWidth);
+      (self.inspectorVisible ? kInspectorWidth : 0);
   self.pdfContentView = [[NSView alloc]
       initWithFrame:NSMakeRect(0, 0, pdfContentWidth,
                                self.rightPanel.bounds.size.height)];
+  self.pdfContentView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
   // 创建PDF视图
   self.view = [[PdfView alloc] initWithFrame:NSMakeRect(0, 0, 800, 600)];
@@ -1911,34 +1913,46 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   scroll.documentView = self.view;
   [self.pdfContentView addSubview:scroll];
 
-  // 添加检查器展开/收起按钮到PDF内容视图
+  // 将PDF内容视图和检查器面板添加到右侧分割视图
+  [rightSplit addSubview:self.pdfContentView];
+  [rightSplit addSubview:self.inspectorPanel];
+  
+  // 保存 rightSplit 的引用（用于 delegate 方法中识别）
+  // 注意：由于 rightSplit 是局部变量，我们通过判断 splitView 是否在 rightPanel 的子视图中来识别
+
+  // 设置初始分割位置（检查器默认收起，完全隐藏）
+  [rightSplit setPosition:self.rightPanel.bounds.size.width
+         ofDividerAtIndex:0];
+  
+  // 初始状态下隐藏检查器面板（即使有宽度也不显示）
+  self.inspectorPanel.hidden = YES;
+
+  [self.rightPanel addSubview:rightSplit];
+  
+  // 添加悬浮的检查器展开/收起按钮到右侧面板（在滚动条上方，独立悬浮）
   CGFloat buttonWidth = kBookmarkCollapsedWidth;
   CGFloat buttonHeight = kControlBarHeight;
-  CGFloat buttonY = (self.pdfContentView.bounds.size.height - buttonHeight) / 2;
+  CGFloat buttonY = (self.rightPanel.bounds.size.height - buttonHeight) / 2;
   self.inspectorToggleButton = [[NSButton alloc]
-      initWithFrame:NSMakeRect(self.pdfContentView.bounds.size.width -
+      initWithFrame:NSMakeRect(self.rightPanel.bounds.size.width -
                                    buttonWidth,
                                buttonY, buttonWidth, buttonHeight)];
-  self.inspectorToggleButton.title = @"▶";
-  self.inspectorToggleButton.font = [NSFont systemFontOfSize:12];
-  self.inspectorToggleButton.bordered = YES;
-  self.inspectorToggleButton.bezelStyle = NSBezelStyleRounded;
+  self.inspectorToggleButton.title = @"◀";
+  self.inspectorToggleButton.font = [NSFont systemFontOfSize:14];
+  self.inspectorToggleButton.bordered = NO; // 无边框，悬浮效果
+  self.inspectorToggleButton.bezelStyle = NSBezelStyleRecessed;
+  // 设置按钮样式为悬浮效果
+  self.inspectorToggleButton.wantsLayer = YES;
+  self.inspectorToggleButton.layer.backgroundColor = [[NSColor controlBackgroundColor] CGColor];
+  self.inspectorToggleButton.layer.cornerRadius = 4.0;
+  self.inspectorToggleButton.layer.shadowOpacity = 0.3;
+  self.inspectorToggleButton.layer.shadowRadius = 2.0;
+  self.inspectorToggleButton.layer.shadowOffset = NSMakeSize(0, -1);
   self.inspectorToggleButton.target = self;
   self.inspectorToggleButton.action = @selector(toggleInspectorVisibility:);
   self.inspectorToggleButton.autoresizingMask =
       NSViewMinXMargin | NSViewMaxYMargin | NSViewMinYMargin;
-  [self.pdfContentView addSubview:self.inspectorToggleButton];
-
-  // 将PDF内容视图和检查器面板添加到右侧分割视图
-  [rightSplit addSubview:self.pdfContentView];
-  [rightSplit addSubview:self.inspectorPanel];
-
-  // 设置初始分割位置（检查器默认收起，只显示按钮宽度）
-  [rightSplit setPosition:self.rightPanel.bounds.size.width -
-                          kBookmarkCollapsedWidth
-         ofDividerAtIndex:0];
-
-  [self.rightPanel addSubview:rightSplit];
+  [self.rightPanel addSubview:self.inspectorToggleButton]; // 添加到 rightPanel，确保在最上层，悬浮在滚动条上方
 
   [self.split addSubview:self.leftPanel];
   [self.split addSubview:self.rightPanel];
@@ -2076,14 +2090,14 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [mainMenu addItem:viewItem];
 
   [NSApp setMainMenu:mainMenu];
-  // 移除窗口顶部“黑块”来源：不给 window.contentView 额外填充视图，直接使用
+  // 移除窗口顶部"黑块"来源：不给 window.contentView 额外填充视图，直接使用
   // splitView； 当前实现中黑块通常来自未初始化的上方填充或 titlebar
   // 自定义区域，这里无需额外处理。
 
   // 启动时设定 first responder，确保菜单快捷键能落到 PdfView
   [self.window makeFirstResponder:self.view];
 
-  // 初始化并重建“最近浏览”菜单
+  // 初始化并重建"最近浏览"菜单
   NSLog(@"[PdfWinViewer] App start: will load settings.json and rebuild recent "
         @"menu");
   [self loadSettingsJSON];
@@ -2795,6 +2809,13 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 #pragma mark - NSSplitViewDelegate
 
 - (void)splitViewDidResizeSubviews:(NSNotification *)notification {
+  NSSplitView *splitView = (NSSplitView *)notification.object;
+  
+  // 只处理左侧书签面板的 splitView，不处理右侧检查器的 splitView
+  if (splitView != self.split) {
+    return;
+  }
+  
   NSLog(@"[ScrollDebug] ========== 分割视图尺寸改变 ==========");
   NSLog(@"[ScrollDebug] 左侧面板新尺寸: %@",
         NSStringFromRect(self.leftPanel.frame));
@@ -2817,9 +2838,23 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 - (CGFloat)splitView:(NSSplitView *)splitView
     constrainMinCoordinate:(CGFloat)proposedMin
                ofSubviewAt:(NSInteger)dividerIndex {
-  if (dividerIndex == 0) {
+  // 判断是左侧书签面板的 splitView 还是右侧检查器面板的 splitView
+  if (splitView == self.split) {
     // 左侧面板最小宽度
-    return kBookmarkCollapsedWidth;
+    if (dividerIndex == 0) {
+      return kBookmarkCollapsedWidth;
+    }
+  } else if (splitView.superview == self.rightPanel) {
+    // 右侧检查器面板的 splitView
+    // 如果检查器隐藏，允许完全收起（分割位置可以设置为 rightPanel 的完整宽度）
+    if (dividerIndex == 0 && !self.inspectorVisible) {
+      // 允许设置到完整宽度，这样检查器面板宽度为0
+      return self.rightPanel.bounds.size.width;
+    }
+    // 检查器显示时，最小宽度为检查器宽度
+    if (dividerIndex == 0) {
+      return self.rightPanel.bounds.size.width - kInspectorWidth;
+    }
   }
   return proposedMin;
 }
@@ -2827,11 +2862,28 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 - (CGFloat)splitView:(NSSplitView *)splitView
     constrainMaxCoordinate:(CGFloat)proposedMax
                ofSubviewAt:(NSInteger)dividerIndex {
-  if (dividerIndex == 0) {
-    // 左侧面板最大宽度
-    return kBookmarkExpandedWidth + 50; // 允许稍微超过标准宽度
+  if (splitView == self.split) {
+    if (dividerIndex == 0) {
+      // 左侧面板最大宽度
+      return kBookmarkExpandedWidth + 50; // 允许稍微超过标准宽度
+    }
+  } else if (splitView.superview == self.rightPanel) {
+    // 右侧检查器面板的 splitView
+    // 如果检查器显示，最大宽度就是检查器宽度
+    if (dividerIndex == 0 && self.inspectorVisible) {
+      return self.rightPanel.bounds.size.width - kInspectorWidth;
+    }
   }
   return proposedMax;
+}
+
+- (BOOL)splitView:(NSSplitView *)splitView shouldAdjustSizeOfSubview:(NSView *)subview {
+  // 如果是右侧检查器的 splitView，且检查器处于隐藏状态，不允许自动调整
+  if (splitView.superview == self.rightPanel && subview == self.inspectorPanel && !self.inspectorVisible) {
+    return NO;
+  }
+  // 对于其他情况，允许自动调整
+  return YES;
 }
 
 // DataSource
@@ -3136,7 +3188,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     [self addRecentPath:path];
     NSLog(@"[PdfWinViewer] after addRecentPath, recent count=%lu",
           (unsigned long)self.recentPaths.count);
-    // 启用“导出当前页为 PNG”
+    // 启用"导出当前页为 PNG"
     NSMenu *fileMenu = [[[NSApp mainMenu] itemWithTitle:@"文件"] submenu];
     NSMenuItem *exp = [fileMenu itemWithTag:9901];
     if (exp)
@@ -3876,6 +3928,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   self.inspectorPanel = [[NSView alloc]
       initWithFrame:NSMakeRect(0, 0, kInspectorWidth,
                                self.rightPanel.bounds.size.height)];
+  self.inspectorPanel.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   self.inspectorPanel.wantsLayer = YES;
   self.inspectorPanel.layer.backgroundColor =
       [[NSColor controlBackgroundColor] CGColor];
@@ -3988,38 +4041,66 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   NSLog(@"[Inspector] 设置检查器可见性: %@", visible ? @"显示" : @"隐藏");
 
   // 更新按钮文本
-  self.inspectorToggleButton.title = visible ? @"◀" : @"▶";
+  // 检查器隐藏时显示◀（表示点击打开右侧窗口），检查器显示时显示▶（表示点击关闭右侧窗口）
+  self.inspectorToggleButton.title = visible ? @"▶" : @"◀";
 
   // 获取右侧分割视图
   NSSplitView *rightSplit = (NSSplitView *)self.rightPanel.subviews.firstObject;
   if (![rightSplit isKindOfClass:[NSSplitView class]])
     return;
 
-  // 计算新的分割位置
-  CGFloat newPosition =
-      visible ? (self.rightPanel.bounds.size.width - kInspectorWidth)
-              : (self.rightPanel.bounds.size.width - kBookmarkCollapsedWidth);
+  // 使用 NSSplitView 的折叠功能来完全收起/展开面板
+  // inspectorPanel 是第二个子视图（index 1）
+  BOOL inspectorAttached = [rightSplit.subviews containsObject:self.inspectorPanel];
 
-  if (animated) {
-    [NSAnimationContext
-        runAnimationGroup:^(NSAnimationContext *context) {
-          context.duration = 0.25;
-          context.allowsImplicitAnimation = YES;
-          [rightSplit.animator setPosition:newPosition ofDividerAtIndex:0];
-        }
-        completionHandler:^{
-          NSLog(@"[Inspector] 检查器切换动画完成");
-          if (visible) {
-            [self updateInspectorLayout];
-            [self updateInspectorContent];
-          }
-        }];
-  } else {
-    [rightSplit setPosition:newPosition ofDividerAtIndex:0];
-    if (visible) {
-      [self updateInspectorLayout];
-      [self updateInspectorContent];
+  if (visible) {
+    // 确保检查器面板已经添加到 split view 中
+    if (!inspectorAttached) {
+      [rightSplit addSubview:self.inspectorPanel];
     }
+
+    // 展开：显示检查器面板
+    CGFloat newPosition = self.rightPanel.bounds.size.width - kInspectorWidth;
+
+    // 先取消隐藏，让 NSSplitView 知道需要为该子视图分配空间
+    self.inspectorPanel.hidden = NO;
+
+    // 立即调整现有子视图，防止旧尺寸影响布局
+    [rightSplit adjustSubviews];
+
+    // 设置新的分割位置
+    [rightSplit setPosition:newPosition ofDividerAtIndex:0];
+    [rightSplit layoutSubtreeIfNeeded];
+
+    NSLog(@"[Inspector] 检查器面板展开，frame: %@", NSStringFromRect(self.inspectorPanel.frame));
+
+    // 更新面板布局和内容
+    [self updateInspectorLayout];
+    [self updateInspectorContent];
+  } else {
+    // 收起：完全隐藏检查器面板
+    CGFloat collapsedPosition = self.rightPanel.bounds.size.width;
+
+    NSLog(@"[Inspector] 收起检查器，rightPanel宽度: %.1f, 目标位置: %.1f",
+          self.rightPanel.bounds.size.width, collapsedPosition);
+
+    // 设置位置，让 PDF 内容占满
+    [rightSplit setPosition:collapsedPosition ofDividerAtIndex:0];
+    [rightSplit layoutSubtreeIfNeeded];
+
+    // 隐藏检查器面板
+    self.inspectorPanel.hidden = YES;
+
+    // 从 split view 中移除检查器面板，防止占用布局空间
+    if (inspectorAttached) {
+      [self.inspectorPanel removeFromSuperview];
+      [rightSplit adjustSubviews];
+    }
+
+    NSLog(@"[Inspector] 检查器收起完成，pdfContentView frame: %@, inspectorPanel frame: %@, 按钮 frame: %@",
+          NSStringFromRect(self.pdfContentView.frame),
+          NSStringFromRect(self.inspectorPanel.frame),
+          NSStringFromRect(self.inspectorToggleButton.frame));
   }
 }
 

@@ -15,3 +15,18 @@ source_set("pdf_utils") {
   configs += [ "//:pdfium_strict_config" ]
 }
 
+source_set("pdfium_object_info") {
+  sources = [
+    "pdfium_object_info.cpp",
+    "pdfium_object_info.h",
+  ]
+  
+  deps = [
+    "//:pdfium",
+  ]
+  
+  configs += [
+    "//:pdfium_strict_config",
+  ]
+}
+

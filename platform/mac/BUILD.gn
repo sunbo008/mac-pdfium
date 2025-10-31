@@ -13,6 +13,7 @@ if (is_mac) {
     deps = [
       "//:pdfium",
       "//platform/shared:pdf_utils",
+      "//platform/shared:pdfium_object_info",
     ]
     
     frameworks = [
