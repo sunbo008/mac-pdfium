@@ -1,0 +1,36 @@
+# Copyright 2024 The PDFium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+if (is_mac) {
+  executable("mac_pdf_viewer") {
+    output_name = "mac_pdf_viewer"
+    
+    sources = [
+      "App.mm",
+    ]
+    
+    deps = [
+      "//:pdfium",
+      "//platform/shared:pdf_utils",
+    ]
+    
+    frameworks = [
+      "AppKit.framework",
+      "CoreFoundation.framework",
+      "UniformTypeIdentifiers.framework",
+    ]
+    
+    configs += [
+      "//:pdfium_strict_config",
+    ]
+    
+    # Mac-specific settings
+    ldflags = [
+      "-framework", "AppKit",
+      "-framework", "CoreFoundation",
+      "-framework", "UniformTypeIdentifiers",
+    ]
+  }
+}
+

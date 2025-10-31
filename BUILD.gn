@@ -12,6 +12,9 @@ group("default") {
   deps = [ ":pdfium" ]
   if (pdf_is_standalone) {
     deps += [ ":pdfium_all" ]
+    if (is_mac) {
+      deps += [ "//platform/mac:mac_pdf_viewer" ]
+    }
   }
 }
 

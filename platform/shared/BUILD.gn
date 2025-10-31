@@ -1,0 +1,17 @@
+# Copyright 2024 The PDFium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+source_set("pdf_utils") {
+  sources = [
+    "pdf_utils.cpp",
+    "pdf_utils.h",
+  ]
+  
+  deps = [
+    "//:pdfium_public_headers",
+  ]
+  
+  configs += [ "//:pdfium_strict_config" ]
+}
+
