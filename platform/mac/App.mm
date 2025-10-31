@@ -1930,24 +1930,30 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [self.rightPanel addSubview:rightSplit];
   
   // 添加悬浮的检查器展开/收起按钮到右侧面板（在滚动条上方，独立悬浮）
-  CGFloat buttonWidth = kBookmarkCollapsedWidth;
-  CGFloat buttonHeight = kControlBarHeight;
+  CGFloat buttonWidth = kBookmarkCollapsedWidth * 1.5; // 调大50%
+  CGFloat buttonHeight = kControlBarHeight * 1.5; // 调大50%
   CGFloat buttonY = (self.rightPanel.bounds.size.height - buttonHeight) / 2;
   self.inspectorToggleButton = [[NSButton alloc]
       initWithFrame:NSMakeRect(self.rightPanel.bounds.size.width -
-                                   buttonWidth,
+                                   buttonWidth - 10, // 距离右边缘2像素
                                buttonY, buttonWidth, buttonHeight)];
   self.inspectorToggleButton.title = @"◀";
-  self.inspectorToggleButton.font = [NSFont systemFontOfSize:14];
+  self.inspectorToggleButton.font = [NSFont systemFontOfSize:21]; // 字体也调大50%（14 * 1.5）
   self.inspectorToggleButton.bordered = NO; // 无边框，悬浮效果
-  self.inspectorToggleButton.bezelStyle = NSBezelStyleRecessed;
+  self.inspectorToggleButton.bezelStyle = NSBezelStyleTexturedSquare; // 使用最简单的样式
   // 设置按钮样式为悬浮效果
   self.inspectorToggleButton.wantsLayer = YES;
-  self.inspectorToggleButton.layer.backgroundColor = [[NSColor controlBackgroundColor] CGColor];
+  self.inspectorToggleButton.layer.backgroundColor = [[NSColor clearColor] CGColor];
   self.inspectorToggleButton.layer.cornerRadius = 4.0;
-  self.inspectorToggleButton.layer.shadowOpacity = 0.3;
-  self.inspectorToggleButton.layer.shadowRadius = 2.0;
-  self.inspectorToggleButton.layer.shadowOffset = NSMakeSize(0, -1);
+  self.inspectorToggleButton.layer.borderWidth = 0.0; // 移除边框
+  self.inspectorToggleButton.layer.borderColor = [[NSColor clearColor] CGColor]; // 边框颜色设为透明
+  self.inspectorToggleButton.layer.shadowOpacity = 0.0;
+  self.inspectorToggleButton.layer.shadowRadius = 0.0;
+  self.inspectorToggleButton.layer.shadowOffset = NSZeroSize;
+  // 设置按钮的 cell 背景为透明
+  if ([self.inspectorToggleButton.cell respondsToSelector:@selector(setBackgroundColor:)]) {
+    [self.inspectorToggleButton.cell setBackgroundColor:[NSColor clearColor]];
+  }
   self.inspectorToggleButton.target = self;
   self.inspectorToggleButton.action = @selector(toggleInspectorVisibility:);
   self.inspectorToggleButton.autoresizingMask =
