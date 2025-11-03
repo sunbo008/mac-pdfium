@@ -1933,10 +1933,11 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   CGFloat buttonWidth = kBookmarkCollapsedWidth * 1.5; // 调大50%
   CGFloat buttonHeight = kControlBarHeight * 1.5; // 调大50%
   CGFloat buttonY = (self.rightPanel.bounds.size.height - buttonHeight) / 2;
+  // 滚动条宽度约为15-20px，按钮距离右边缘需要避开滚动条
+  CGFloat scrollBarWidth = 15.0; // 滚动条宽度
+  CGFloat buttonX = self.rightPanel.bounds.size.width - buttonWidth - scrollBarWidth; // 距离滚动条2像素
   self.inspectorToggleButton = [[NSButton alloc]
-      initWithFrame:NSMakeRect(self.rightPanel.bounds.size.width -
-                                   buttonWidth - 10, // 距离右边缘2像素
-                               buttonY, buttonWidth, buttonHeight)];
+      initWithFrame:NSMakeRect(buttonX, buttonY, buttonWidth, buttonHeight)];
   self.inspectorToggleButton.title = @"◀";
   self.inspectorToggleButton.font = [NSFont systemFontOfSize:21]; // 字体也调大50%（14 * 1.5）
   self.inspectorToggleButton.bordered = NO; // 无边框，悬浮效果
@@ -1958,7 +1959,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   self.inspectorToggleButton.action = @selector(toggleInspectorVisibility:);
   self.inspectorToggleButton.autoresizingMask =
       NSViewMinXMargin | NSViewMaxYMargin | NSViewMinYMargin;
-  [self.rightPanel addSubview:self.inspectorToggleButton]; // 添加到 rightPanel，确保在最上层，悬浮在滚动条上方
+  // 将按钮添加到 rightPanel，并确保它在 rightSplit 上方（不被遮挡）
+  [self.rightPanel addSubview:self.inspectorToggleButton positioned:NSWindowAbove relativeTo:rightSplit];
 
   [self.split addSubview:self.leftPanel];
   [self.split addSubview:self.rightPanel];
