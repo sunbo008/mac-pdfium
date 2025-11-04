@@ -30,3 +30,14 @@ source_set("pdfium_object_info") {
   ]
 }
 
+source_set("logger") {
+  sources = [
+    "logger.cpp",
+    "logger.h",
+  ]
+  
+  configs += [
+    "//:pdfium_strict_config",
+  ]
+}
+

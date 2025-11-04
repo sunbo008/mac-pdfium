@@ -5,6 +5,7 @@
 //
 #include "../shared/pdf_utils.h"
 #include "../shared/pdfium_object_info.h"
+#include "../shared/logger.h"
 #import <Cocoa/Cocoa.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include "public/fpdf_doc.h"
@@ -12,6 +13,7 @@
 #include "public/fpdf_text.h"
 #include "public/fpdfview.h"
 #include <mach/mach.h>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -554,7 +556,18 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 
 - (BOOL)openPDFAtPath:(NSString *)path {
   NSLog(@"[PdfWinViewer] openPDFAtPath: %@", path);
+  
+  // 记录开始时间
+  auto startTime = std::chrono::steady_clock::now();
+  
+  // 使用新日志模块记录打开文件
+  LOG_INFO_F("========================================");
+  LOG_INFO_F("正在打开 PDF 文件：%s", [path UTF8String]);
+  LOG_DEBUG_F("文件完整路径：%s", [path UTF8String]);
+  LOG_DEBUG_F("文件名：%s", [[path lastPathComponent] UTF8String]);
+  
   if (_doc) {
+    LOG_DEBUG("关闭之前打开的文档");
     FPDF_CloseDocument(_doc);
     _doc = nullptr;
     _pageIndex = 0;
@@ -564,12 +577,28 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   FPDF_LIBRARY_CONFIG cfg{};
   cfg.version = 3;
   FPDF_InitLibraryWithConfig(&cfg);
+  
+  LOG_DEBUG("调用 FPDF_LoadDocument");
+  auto loadStartTime = std::chrono::steady_clock::now();
   _doc = FPDF_LoadDocument(u8.c_str(), nullptr);
+  auto loadEndTime = std::chrono::steady_clock::now();
+  
   if (!_doc) {
+    LOG_ERROR_F("打开 PDF 文件失败：%s", [path UTF8String]);
     LogFPDFLastError("FPDF_LoadDocument");
     return NO;
   }
+  
+  double loadTimeMs = std::chrono::duration<double, std::milli>(loadEndTime - loadStartTime).count();
+  
   int pc = FPDF_GetPageCount(_doc);
+  
+  // 计算总耗时
+  auto endTime = std::chrono::steady_clock::now();
+  double totalTimeMs = std::chrono::duration<double, std::milli>(endTime - startTime).count();
+  
+  LOG_INFO_F("PDF 文件打开成功，共 %d 页", pc);
+  LOG_INFO_F("⏱️  文档加载耗时：%.2f ms（FPDF_LoadDocument: %.2f ms）", totalTimeMs, loadTimeMs);
   NSLog(@"[PdfWinViewer] document loaded. pageCount=%d", pc);
 // 首次渲染计时起点（只要编译时启用日志就记录，运行时再判断是否输出）
 #if PDFWV_ENABLE_LOGGING
@@ -848,10 +877,17 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
     _lastMemMB = curMB;
     if (_firstRenderAfterOpen) {
       double openMs = (t1 - _openStartSec) * 1000.0;
+      LOG_INFO_F("🎨 首次渲染完成 - 页面 %d，缩放 %.0f%%，耗时 %.2f ms（从打开到首次显示）", 
+                 _pageIndex + 1, _zoom * 100.0, openMs);
       Log_WritePerfEx(_pageIndex + 1, _zoom * 100.0, openMs, curMB, dMB,
                       L"打开PDF→首次渲染", __FILE__, __LINE__, __FUNCTION__);
       _firstRenderAfterOpen = false;
     } else {
+      // 只在耗时较长时记录，避免日志过多
+      if (ms > 30.0) {  // 超过 30ms 才记录
+        LOG_DEBUG_F("🎨 页面渲染 - 页面 %d，缩放 %.0f%%，耗时 %.2f ms", 
+                    _pageIndex + 1, _zoom * 100.0, ms);
+      }
       Log_WritePerf(_pageIndex + 1, _zoom * 100.0, ms, curMB, dMB);
     }
   }
@@ -3166,11 +3202,36 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 - (void)openPathAndAdjust:(NSString *)path {
-  if (path.length == 0)
+  if (path.length == 0) {
+    LOG_WARNING("openPathAndAdjust: 路径为空");
     return;
+  }
+  
   NSLog(@"[PdfWinViewer] openPathAndAdjust: %@", path);
+  LOG_INFO_F("用户请求打开文件：%s", [[path lastPathComponent] UTF8String]);
+  
+  // 检查文件是否存在
+  if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+    LOG_ERROR_F("文件不存在：%s", [path UTF8String]);
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"文件不存在";
+    alert.informativeText = path;
+    [alert runModal];
+    return;
+  }
+  
+  // 获取文件大小
+  NSError *error = nil;
+  NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:&error];
+  if (attrs) {
+    unsigned long long fileSize = [attrs fileSize];
+    LOG_INFO_F("文件大小：%.2f MB", fileSize / (1024.0 * 1024.0));
+  }
+  
   if ([self.view openPDFAtPath:path]) {
     NSLog(@"[StatusBar] PDF文件打开成功，准备更新状态栏");
+    LOG_INFO("PDF 文件加载成功，开始初始化界面");
+    
     [self rebuildToc];
     [self.window makeFirstResponder:self.view];
     // 更新状态栏显示（确保状态栏已初始化）
@@ -3189,6 +3250,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     NSRect f = self.window.frame;
     f.size = NSMakeSize(newW, newH);
     [self.window setFrame:f display:YES animate:YES];
+    LOG_DEBUG_F("窗口大小调整为：%.0f x %.0f", newW, newH);
+    
     // 更新窗口标题
     self.window.title = [NSString
         stringWithFormat:@"PdfWinViewer - %@", path.lastPathComponent];
@@ -3196,12 +3259,18 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     [self addRecentPath:path];
     NSLog(@"[PdfWinViewer] after addRecentPath, recent count=%lu",
           (unsigned long)self.recentPaths.count);
+    LOG_DEBUG_F("已添加到最近文件列表，当前列表数量：%lu", (unsigned long)self.recentPaths.count);
+    
     // 启用"导出当前页为 PNG"
     NSMenu *fileMenu = [[[NSApp mainMenu] itemWithTitle:@"文件"] submenu];
     NSMenuItem *exp = [fileMenu itemWithTag:9901];
     if (exp)
       [exp setEnabled:YES];
+    
+    LOG_INFO_F("文件打开完成：%s", [[path lastPathComponent] UTF8String]);
+    LOG_INFO_F("========================================");
   } else {
+    LOG_ERROR_F("无法打开 PDF 文件：%s", [path UTF8String]);
     NSAlert *alert = [NSAlert new];
     alert.messageText = @"无法打开 PDF";
     alert.informativeText = path ?: @"";
@@ -4296,6 +4365,16 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   });
 }
 
+// 应用即将退出时的清理工作
+- (void)applicationWillTerminate:(NSNotification *)notification {
+  LOG_INFO("========================================");
+  LOG_INFO("Application will terminate");
+  LOG_INFO("Flushing logs...");
+  pdfium_viewer::Logger::GetInstance().Flush();
+  LOG_INFO("Application terminated gracefully");
+  LOG_INFO("========================================");
+}
+
 // 当最后一个窗口关闭时退出应用
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
   return YES;
@@ -4305,6 +4384,29 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
+    // ========== 初始化全局日志系统 ==========
+    NSString* execPath = [[NSBundle mainBundle] executablePath];
+    std::string app_path = [execPath UTF8String];
+    
+    // 初始化日志：10MB 文件大小，保留 5 个历史文件
+    pdfium_viewer::Logger::GetInstance().Initialize(app_path, 10 * 1024 * 1024, 5);
+    
+    // 设置为 DEBUG 级别（开发阶段）
+    pdfium_viewer::Logger::GetInstance().SetLevel(pdfium_viewer::LogLevel::DEBUG);
+    
+    // 开发时启用控制台输出（可选）
+    #ifdef DEBUG
+    pdfium_viewer::Logger::GetInstance().SetConsoleOutput(true);
+    #endif
+    
+    LOG_INFO("========================================");
+    LOG_INFO("PdfWinViewer Application Starting");
+    LOG_INFO_F("Version: %s", "1.0.0");
+    LOG_INFO_F("PID: %d", getpid());
+    LOG_INFO_F("Executable: %s", app_path.c_str());
+    LOG_INFO("========================================");
+    // ========================================
+    
     // 检查是否已有实例运行
     NSString *bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
     NSArray<NSRunningApplication *> *runningApps = 
@@ -4324,6 +4426,7 @@ int main(int argc, const char *argv[]) {
     
     // 如果已有其他实例运行，激活它并退出
     if (existingApp) {
+      LOG_INFO_F("检测到已有实例运行（PID: %d），激活现有窗口并退出", existingApp.processIdentifier);
       NSLog(@"[PdfWinViewer] 检测到已有实例运行（PID: %d），激活现有窗口并退出", 
             existingApp.processIdentifier);
       
@@ -4343,6 +4446,7 @@ int main(int argc, const char *argv[]) {
       return 0;
     }
     
+    LOG_INFO("单实例检查通过，启动应用");
     NSApplication *app = [NSApplication sharedApplication];
     
     // 设置为前台应用（非后台应用）

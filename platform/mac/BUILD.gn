@@ -8,12 +8,15 @@ if (is_mac) {
     
     sources = [
       "App.mm",
+      "LoggerHelper.mm",
+      "LoggerHelper.h",
     ]
     
     deps = [
       "//:pdfium",
       "//platform/shared:pdf_utils",
       "//platform/shared:pdfium_object_info",
+      "//platform/shared:logger",
     ]
     
     frameworks = [
