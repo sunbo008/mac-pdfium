@@ -508,6 +508,101 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
        fromIndex:(NSNumber*)startIndex;  // 文本查找功能
 @end
 
+// 自定义NSView子类,支持拖拽打开PDF文件
+@interface DragDropView : NSView
+@property(nonatomic, weak) id<NSApplicationDelegate> appDelegate;
+@end
+
+@implementation DragDropView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+  self = [super initWithFrame:frameRect];
+  if (self) {
+    // 注册接受的拖拽类型
+    [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
+  }
+  return self;
+}
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+  NSPasteboard* pboard = [sender draggingPasteboard];
+
+  if ([[pboard types] containsObject:NSPasteboardTypeFileURL]) {
+    // 获取文件URL
+    NSURL* fileURL = [NSURL URLFromPasteboard:pboard];
+    if (fileURL &&
+        [fileURL.pathExtension.lowercaseString isEqualToString:@"pdf"]) {
+      return NSDragOperationCopy;
+    }
+  }
+
+  return NSDragOperationNone;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+  NSPasteboard* pboard = [sender draggingPasteboard];
+
+  if ([[pboard types] containsObject:NSPasteboardTypeFileURL]) {
+    NSURL* fileURL = [NSURL URLFromPasteboard:pboard];
+    if (fileURL &&
+        [fileURL.pathExtension.lowercaseString isEqualToString:@"pdf"]) {
+      // 获取文件路径
+      NSString* filePath = fileURL.path;
+
+      // 调用 AppDelegate 的打开文件方法
+      if (self.appDelegate &&
+          [self.appDelegate respondsToSelector:@selector(openPathAndAdjust:)]) {
+        [(id)self.appDelegate performSelector:@selector(openPathAndAdjust:)
+                                   withObject:filePath];
+        return YES;
+      }
+    }
+  }
+
+  return NO;
+}
+
+@end
+
+// 自定义NSTextView子类,支持Cmd+A全选
+@interface SelectableTextView : NSTextView
+@end
+
+@implementation SelectableTextView
+
+- (void)keyDown:(NSEvent*)event {
+  NSString* chars = [event charactersIgnoringModifiers];
+  unichar c = chars.length ? [chars characterAtIndex:0] : 0;
+  NSEventModifierFlags mods =
+      event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+
+  // 处理 Cmd+A 全选
+  if ((mods & NSEventModifierFlagCommand) && (c == 'a' || c == 'A')) {
+    [self selectAll:nil];
+    return;
+  }
+
+  // 其他按键交给父类处理
+  [super keyDown:event];
+}
+
+- (BOOL)performKeyEquivalent:(NSEvent*)event {
+  NSString* chars = [event charactersIgnoringModifiers];
+  unichar c = chars.length ? [chars characterAtIndex:0] : 0;
+  NSEventModifierFlags mods =
+      event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+
+  // 处理 Cmd+A 全选
+  if ((mods & NSEventModifierFlagCommand) && (c == 'a' || c == 'A')) {
+    [self selectAll:nil];
+    return YES;
+  }
+
+  return [super performKeyEquivalent:event];
+}
+
+@end
+
 @implementation PdfView {
   FPDF_DOCUMENT _doc;
   int _pageIndex;
@@ -1834,9 +1929,10 @@ static TocNode* BuildBookmarksTree(FPDF_DOCUMENT doc) {
         NSStringFromRect(self.window.frame),
         self.window.isVisible ? @"YES" : @"NO");
 
-  // 创建主容器视图，包含主内容区域和底部状态栏
-  NSView* containerView =
-      [[NSView alloc] initWithFrame:self.window.contentView.bounds];
+  // 创建主容器视图，包含主内容区域和底部状态栏(支持拖拽打开PDF)
+  DragDropView* containerView =
+      [[DragDropView alloc] initWithFrame:self.window.contentView.bounds];
+  containerView.appDelegate = self;
   containerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
   // 创建主内容区域（占据除状态栏外的所有空间）
@@ -4170,13 +4266,17 @@ static TocNode* BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   [self.inspectorPanel addSubview:titleBar];
 
-  // 创建文本视图用于显示页面信息
+  // 创建文本视图用于显示页面信息(使用自定义类支持Cmd+A)
   NSRect textFrame =
       NSMakeRect(0, 0, kInspectorWidth,
                  self.inspectorPanel.bounds.size.height - kControlBarHeight);
-  self.inspectorTextView = [[NSTextView alloc] initWithFrame:textFrame];
+  self.inspectorTextView = [[SelectableTextView alloc] initWithFrame:textFrame];
   self.inspectorTextView.editable = NO;
   self.inspectorTextView.selectable = YES;
+
+  // 启用 Cmd+A 全选功能
+  self.inspectorTextView.usesFindPanel = YES;
+  self.inspectorTextView.allowsUndo = NO;
 
   // 初始化对象位置映射
   self.objectPositions = [[NSMutableDictionary alloc] init];
