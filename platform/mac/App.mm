@@ -14,6 +14,7 @@
 #include "../shared/pdfium_object_info.h"
 #include "../shared/watermark_callback.h"  // [AP-FORM-IMAGE-WATERMARK]
 #include "fpdfsdk/cpdfsdk_renderpage.h"    // [AP-FORM-IMAGE-WATERMARK]
+#include "public/fpdf_annot.h"
 #include "public/fpdf_doc.h"
 #include "public/fpdf_edit.h"
 #include "public/fpdf_text.h"
@@ -4374,15 +4375,31 @@ static TocNode* BuildBookmarksTree(FPDF_DOCUMENT doc) {
                                                  attributes:normalAttrs]];
 
   // 如果有子节点，直接显示子节点（添加安全检查）
-  if (node->children && node->child_count > 0 &&
-      node->child_count < 200) {  // 增加子节点数量限制
-    for (int i = 0; i < node->child_count; i++) {
+  if (node->children && node->child_count > 0) {
+    // 限制显示的子节点数量，避免界面卡顿
+    int maxDisplayChildren = 1000;
+    int displayCount = (node->child_count < maxDisplayChildren)
+                           ? node->child_count
+                           : maxDisplayChildren;
+
+    for (int i = 0; i < displayCount; i++) {
       if (node->children[i]) {
         [self displayObjectTreeNode:node->children[i]
                    attributedString:attributedInfo
                         normalAttrs:normalAttrs
                         objNumAttrs:objNumAttrs];
       }
+    }
+
+    // 如果子节点数量超过限制，显示提示信息
+    if (node->child_count > maxDisplayChildren) {
+      NSString* warningStr = [NSString
+          stringWithFormat:@"[提示] 对象 %u 有 %d 个子节点，仅显示前 %d 个\n\n",
+                           node->obj_num, node->child_count,
+                           maxDisplayChildren];
+      [attributedInfo appendAttributedString:[[NSAttributedString alloc]
+                                                 initWithString:warningStr
+                                                     attributes:normalAttrs]];
     }
   }
 }
@@ -4412,8 +4429,11 @@ static TocNode* BuildBookmarksTree(FPDF_DOCUMENT doc) {
   double pageWidth = FPDF_GetPageWidth(page);
   double pageHeight = FPDF_GetPageHeight(page);
 
-  // 获取页面对象数量
-  int objectCount = FPDFPage_CountObjects(page);
+  // 获取页面对象数量（内容流中的绘图对象）
+  int pageObjectCount = FPDFPage_CountObjects(page);
+
+  // 获取注释数量
+  int annotCount = FPDFPage_GetAnnotCount(page);
 
   // 构建带颜色的属性文本
   NSMutableAttributedString* attributedInfo =
@@ -4433,24 +4453,30 @@ static TocNode* BuildBookmarksTree(FPDF_DOCUMENT doc) {
                                                       weight:NSFontWeightBold]
   };
 
-  // 添加基础信息
-  NSString* basicInfo = [NSString
-      stringWithFormat:@"PDF 文档信息\n================\n\n当前页面: %d / "
-                       @"%d\n页面尺寸: %.2f x %.2f pt\n页面对象数: "
-                       @"%d\n\nPDF对象引用树\n================\n",
-                       currentPage + 1, totalPages, pageWidth, pageHeight,
-                       objectCount];
-  [attributedInfo appendAttributedString:[[NSAttributedString alloc]
-                                             initWithString:basicInfo
-                                                 attributes:normalAttrs]];
-
   // 清空对象位置映射
   [self.objectPositions removeAllObjects];
 
   // 构建PDF对象引用树
-  // Note: Object tree functionality is not fully implemented yet
-  PDFIUM_EX_OBJECT_TREE_NODE* object_tree = PdfiumEx_BuildObjectTree(
-      doc, page, 1000000);  // 最大深度5层，支持完整分析
+  PDFIUM_EX_OBJECT_TREE_NODE* object_tree =
+      PdfiumEx_BuildObjectTree(doc, page, 1000000);  // 最大深度，支持完整分析
+
+  // 统计对象树中的总对象数
+  int totalObjectCount = 0;
+  if (object_tree) {
+    totalObjectCount = PdfiumEx_CountObjectTreeNodes(object_tree);
+  }
+
+  // 添加基础信息
+  NSString* basicInfo = [NSString
+      stringWithFormat:@"PDF 文档信息\n================\n\n当前页面: %d / "
+                       @"%d\n页面尺寸: %.2f x %.2f pt\n"
+                       @"页面绘图对象: %d\n注释对象: %d\n对象树节点数: %d\n\n"
+                       @"PDF对象引用树\n================\n",
+                       currentPage + 1, totalPages, pageWidth, pageHeight,
+                       pageObjectCount, annotCount, totalObjectCount];
+  [attributedInfo appendAttributedString:[[NSAttributedString alloc]
+                                             initWithString:basicInfo
+                                                 attributes:normalAttrs]];
 
   if (object_tree) {
     // 递归显示树结构

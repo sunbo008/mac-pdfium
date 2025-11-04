@@ -80,6 +80,9 @@ PDFIUM_EX_OBJECT_TREE_NODE* PdfiumEx_BuildObjectTree(FPDF_DOCUMENT document,
                                                      FPDF_PAGE page,
                                                      int max_depth);
 
+// 统计对象树中的节点总数
+int PdfiumEx_CountObjectTreeNodes(PDFIUM_EX_OBJECT_TREE_NODE* root);
+
 // 释放PDF对象树
 void PdfiumEx_ReleaseObjectTree(PDFIUM_EX_OBJECT_TREE_NODE* root);
 

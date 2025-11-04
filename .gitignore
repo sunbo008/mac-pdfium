@@ -87,3 +87,4 @@ cleanup_debug_scripts.sh
 
 # 编译数据库备份
 compile_commands.json.backup
+docs/image/

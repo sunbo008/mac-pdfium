@@ -13,6 +13,9 @@
 #include <unordered_map>
 #include <vector>
 
+// 包含日志系统
+#include "platform/shared/logger.h"
+
 using namespace pdfium_ex;
 
 // 包含高级映射功能
@@ -429,6 +432,52 @@ static void AddChildNode(PDFIUM_EX_OBJECT_TREE_NODE* parent,
   parent->children[parent->child_count++] = child;
 }
 
+// 递归提取字典中的所有引用（支持深层嵌套）
+static void ExtractReferencesFromDict(const CPDF_Dictionary* dict,
+                                      std::vector<uint32_t>& ref_obj_nums,
+                                      uint32_t current_obj_num,
+                                      int depth = 0,
+                                      int max_depth = 10) {
+  if (!dict || depth >= max_depth || ref_obj_nums.size() >= 1000) {
+    return;
+  }
+
+  CPDF_DictionaryLocker locker(dict);
+  for (const auto& pair : locker) {
+    const ByteString& key = pair.first;
+    const CPDF_Object* value = pair.second.Get();
+    if (!value) {
+      continue;
+    }
+
+    if (value->IsReference()) {
+      uint32_t ref_num = value->AsReference()->GetRefObjNum();
+      if (ref_num > 0 && ref_num != current_obj_num) {
+        ref_obj_nums.push_back(ref_num);
+      }
+    } else if (value->IsDictionary()) {
+      // 递归处理嵌套字典
+      ExtractReferencesFromDict(value->AsDictionary(), ref_obj_nums,
+                                current_obj_num, depth + 1, max_depth);
+    } else if (value->IsArray()) {
+      const CPDF_Array* arr = value->AsArray();
+      for (size_t i = 0; i < arr->size() && i < 100; ++i) {
+        const CPDF_Object* arr_obj = arr->GetObjectAt(i);
+        if (arr_obj && arr_obj->IsReference()) {
+          uint32_t ref_num = arr_obj->AsReference()->GetRefObjNum();
+          if (ref_num > 0 && ref_num != current_obj_num) {
+            ref_obj_nums.push_back(ref_num);
+          }
+        } else if (arr_obj && arr_obj->IsDictionary()) {
+          // 递归处理数组中的字典
+          ExtractReferencesFromDict(arr_obj->AsDictionary(), ref_obj_nums,
+                                    current_obj_num, depth + 1, max_depth);
+        }
+      }
+    }
+  }
+}
+
 // 队列式构建对象树（替代递归方式）
 static void BuildObjectTreeWithQueue(FPDF_DOCUMENT document,
                                      PDFIUM_EX_OBJECT_TREE_NODE* root,
@@ -470,57 +519,27 @@ static void BuildObjectTreeWithQueue(FPDF_DOCUMENT document,
     // 获取当前对象
     RetainPtr<const CPDF_Object> obj =
         pDoc->GetOrParseIndirectObject(current_obj_num);
-    if (!obj || !obj->IsDictionary()) {
+    if (!obj) {
       continue;
     }
 
-    const CPDF_Dictionary* dict = obj->AsDictionary();
-
-    // 收集所有引用的对象编号
-    std::vector<uint32_t> ref_obj_nums;
-
-    CPDF_DictionaryLocker locker(dict);
-    for (const auto& pair : locker) {
-      const CPDF_Object* value = pair.second.Get();
-      if (!value) {
-        continue;
-      }
-
-      if (value->IsReference()) {
-        uint32_t ref_num = value->AsReference()->GetRefObjNum();
-        if (ref_num > 0 && ref_num != current_obj_num) {  // 避免自引用
-          ref_obj_nums.push_back(ref_num);
-        }
-      } else if (value->IsArray()) {
-        const CPDF_Array* arr = value->AsArray();
-        for (size_t i = 0; i < arr->size() && i < 100;
-             ++i) {  // 支持大型注释数组
-          const CPDF_Object* arr_obj = arr->GetObjectAt(i);
-          if (arr_obj && arr_obj->IsReference()) {
-            uint32_t ref_num = arr_obj->AsReference()->GetRefObjNum();
-            if (ref_num > 0 && ref_num != current_obj_num) {
-              ref_obj_nums.push_back(ref_num);
-            }
-          }
-        }
-      } else if (value->IsDictionary() &&
-                 current_node->depth < 1000000) {  // 只在前2层处理字典引用
-        const CPDF_Dictionary* sub_dict = value->AsDictionary();
-        CPDF_DictionaryLocker sub_locker(sub_dict);
-        for (const auto& sub_pair : sub_locker) {
-          if (ref_obj_nums.size() >= 1000000) {
-            break;  // 限制总引用数量
-          }
-          const CPDF_Object* sub_obj = sub_pair.second.Get();
-          if (sub_obj && sub_obj->IsReference()) {
-            uint32_t ref_num = sub_obj->AsReference()->GetRefObjNum();
-            if (ref_num > 0 && ref_num != current_obj_num) {
-              ref_obj_nums.push_back(ref_num);
-            }
-          }
-        }
-      }
+    // Stream 对象也有字典部分,需要特殊处理
+    const CPDF_Dictionary* dict = nullptr;
+    if (obj->IsDictionary()) {
+      dict = obj->AsDictionary();
+    } else if (obj->IsStream()) {
+      dict = obj->AsStream()->GetDict();
+    } else {
+      continue;
     }
+
+    if (!dict) {
+      continue;
+    }
+
+    // 收集所有引用的对象编号（使用递归提取函数）
+    std::vector<uint32_t> ref_obj_nums;
+    ExtractReferencesFromDict(dict, ref_obj_nums, current_obj_num);
 
     // 为每个引用的对象创建子节点
     for (uint32_t ref_obj_num : ref_obj_nums) {
@@ -609,6 +628,22 @@ PDFIUM_EX_OBJECT_TREE_NODE* PdfiumEx_BuildObjectTree(FPDF_DOCUMENT document,
   BuildObjectTreeWithQueue(document, root, max_depth);
 
   return root;
+}
+
+int PdfiumEx_CountObjectTreeNodes(PDFIUM_EX_OBJECT_TREE_NODE* root) {
+  if (!root) {
+    return 0;
+  }
+
+  // 当前节点算1个
+  int count = 1;
+
+  // 递归统计所有子节点
+  for (int i = 0; i < root->child_count; i++) {
+    count += PdfiumEx_CountObjectTreeNodes(root->children[i]);
+  }
+
+  return count;
 }
 
 void PdfiumEx_ReleaseObjectTree(PDFIUM_EX_OBJECT_TREE_NODE* root) {
