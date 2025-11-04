@@ -483,6 +483,20 @@ use_clang_modules = false
             # 如果 Info.plist 不存在，创建一个基本的
             self.create_info_plist(contents_dir)
         
+        # [AP-FORM-IMAGE-WATERMARK] 复制水印资源文件
+        watermark_src = self.project_root / "platform" / "shared" / "Resources" / "watermark.jpeg"
+        if watermark_src.exists():
+            watermark_dst = resources_dir / "watermark.jpeg"
+            shutil.copy2(watermark_src, watermark_dst)
+            Logger.info(f"[AP-FORM-IMAGE-WATERMARK] 已复制水印资源: {watermark_dst}")
+        else:
+            Logger.warning(f"[AP-FORM-IMAGE-WATERMARK] 水印资源文件不存在: {watermark_src}")
+        
+        # [AP-FORM-IMAGE-WATERMARK] 创建临时输出目录
+        tmp_dir = app_bundle / "tmp"
+        tmp_dir.mkdir(exist_ok=True)
+        Logger.info(f"[AP-FORM-IMAGE-WATERMARK] 已创建临时输出目录: {tmp_dir}")
+        
         return app_bundle
     
     def create_info_plist(self, contents_dir: Path):

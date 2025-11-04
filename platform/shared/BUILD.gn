@@ -50,6 +50,7 @@ source_set("watermark_callback") {
   deps = [
     "//:pdfium",
     ":logger",
+    "//core/fxcodec",  # [AP-FORM-IMAGE-WATERMARK] 图片解码支持
   ]
   
   configs += [
