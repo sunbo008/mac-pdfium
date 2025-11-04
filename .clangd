@@ -1,0 +1,50 @@
+# clangd 配置文件
+# 优先使用代码导航功能，禁用错误诊断
+
+CompileFlags:
+  Add:
+    - "-std=c++20"
+    - "-xc++"
+    - "-ferror-limit=0"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/out/Debug/gen"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/build"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/constants"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/core"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/fpdfsdk"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/platform"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/public"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/third_party/abseil-cpp"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/third_party/freetype/include"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/third_party/icu/source/common"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/third_party/icu/source/i18n"
+    - "-I/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium/base/allocator/partition_allocator/src"
+    - "-D__STDC_CONSTANT_MACROS"
+    - "-D__STDC_FORMAT_MACROS"
+    - "-D__ARM_NEON__=1"
+    - "-DBUILD_OS_DARWIN"
+    - "-resource-dir=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/16"
+  Remove:
+    - "-fcrash-diagnostics-dir=*"
+    - "-mllvm*"
+    - "-Werror"
+
+Diagnostics:
+  ClangTidy:
+    CheckOptions: {}
+  UnusedIncludes: None
+  MissingIncludes: None
+  Suppress:
+    - "*"
+
+Index:
+  Background: Build
+
+Completion:
+  AllScopes: No
+
+InlayHints:
+  Enabled: No
+
+Hover:
+  ShowAKA: No

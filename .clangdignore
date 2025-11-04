@@ -1,0 +1,51 @@
+# 排除不需要索引的目录和文件
+
+# 构建输出
+out/
+build/
+
+# 第三方库
+third_party/
+v8/
+
+# 测试文件
+testing/
+
+# 构建工具
+buildtools/
+build/
+
+# 示例代码
+samples/
+
+# 文档
+docs/
+
+# 生成的文件
+*.gen.h
+*.gen.cpp
+*.pb.h
+*.pb.cc
+
+# 对象文件
+*.o
+*.obj
+*.a
+*.lib
+*.dylib
+*.so
+
+# 其他
+.git/
+.vscode/
+*.dSYM/
+
+
+
+
+
+
+
+
+
+
