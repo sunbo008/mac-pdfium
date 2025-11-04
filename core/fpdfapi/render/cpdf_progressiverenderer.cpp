@@ -17,6 +17,7 @@
 #include "core/fxcrt/check.h"
 #include "core/fxcrt/pauseindicator_iface.h"
 #include "core/fxge/cfx_renderdevice.h"
+#include "platform/shared/logger.h"  // [AP-FORM-IMAGE-WATERMARK]
 
 CPDF_ProgressiveRenderer::CPDF_ProgressiveRenderer(
     CPDF_RenderContext* pContext,
@@ -58,6 +59,21 @@ void CPDF_ProgressiveRenderer::Continue(PauseIndicatorIface* pPause) {
       }
       render_status_->SetTransparency(
           current_layer_->GetObjectHolder()->GetTransparency());
+
+      // [AP-FORM-IMAGE-WATERMARK] 传播回调从 RenderContext
+      void* callback = context_->GetImageCallback();
+      if (callback) {
+        render_status_->SetImageCallback(
+            static_cast<CPDF_RenderStatus::ImageCallbackIface*>(callback));
+        LOG_DEBUG_F(
+            "[AP-FORM-IMAGE-WATERMARK] ProgressiveRenderer: Propagated "
+            "callback to render_status_");
+      } else {
+        LOG_DEBUG_F(
+            "[AP-FORM-IMAGE-WATERMARK] ProgressiveRenderer: No callback in "
+            "context to propagate");
+      }
+
       render_status_->Initialize(nullptr, nullptr);
       device_->SaveState();
       clip_rect_ = current_layer_->GetMatrix().GetInverse().TransformRect(

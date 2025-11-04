@@ -42,6 +42,7 @@
 #include "core/fxge/dib/cfx_dibbase.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
 #include "core/fxge/dib/cfx_imagestretcher.h"
+#include "platform/shared/logger.h"  // [AP-FORM-IMAGE-WATERMARK]
 
 #if BUILDFLAG(IS_WIN)
 #include "core/fxge/dib/cfx_imagetransformer.h"
@@ -61,7 +62,12 @@ bool IsImageValueTooBig(int val) {
 }  // namespace
 
 CPDF_ImageRenderer::CPDF_ImageRenderer(CPDF_RenderStatus* pStatus)
-    : render_status_(pStatus), loader_(std::make_unique<CPDF_ImageLoader>()) {}
+    : render_status_(pStatus),
+      loader_(std::make_unique<CPDF_ImageLoader>()),
+      // [AP-FORM-IMAGE-WATERMARK] 获取回调和标志
+      image_callback_(pStatus ? static_cast<void*>(pStatus->GetImageCallback())
+                              : nullptr),
+      in_appearance_form_(pStatus ? pStatus->IsInAppearanceForm() : false) {}
 
 CPDF_ImageRenderer::~CPDF_ImageRenderer() = default;
 
@@ -91,6 +97,42 @@ bool CPDF_ImageRenderer::StartRenderDIBBase() {
   CPDF_GeneralState& state = image_object_->mutable_general_state();
   alpha_ = state.GetFillAlpha();
   dibbase_ = loader_->GetBitmap();
+
+  // [AP-FORM-IMAGE-WATERMARK] 调试：输出关键变量状态
+  LOG_DEBUG_F(
+      "[AP-FORM-IMAGE-WATERMARK] Image render check: in_appearance_form_=%s, "
+      "image_callback_=%s",
+      (in_appearance_form_ ? "true" : "false"),
+      (image_callback_ ? "valid" : "null"));
+
+  // [AP-FORM-IMAGE-WATERMARK] 在 ap-form 中且回调存在时调用
+  if (in_appearance_form_ && image_callback_) {
+    // 将 dibbase_ 转换为 CFX_DIBitmap
+    RetainPtr<CFX_DIBitmap> bitmap = dibbase_->Realize();
+
+    if (bitmap) {
+      int width = bitmap->GetWidth();
+      int height = bitmap->GetHeight();
+      LOG_INFO_F(
+          "[AP-FORM-IMAGE-WATERMARK] Calling image callback for image %dx%d",
+          width, height);
+
+      // 将 void* 转回正确的类型并调用
+      auto* callback =
+          static_cast<CPDF_RenderStatus::ImageCallbackIface*>(image_callback_);
+      RetainPtr<CFX_DIBitmap> processed =
+          callback->OnImageRendering(image_object_, obj_to_device_, bitmap);
+
+      if (processed) {
+        LOG_INFO_F("[AP-FORM-IMAGE-WATERMARK] Using watermarked bitmap");
+        dibbase_ = processed;
+      } else {
+        LOG_INFO_F(
+            "[AP-FORM-IMAGE-WATERMARK] Callback returned null, using original");
+      }
+    }
+  }
+
   if (GetRenderOptions().ColorModeIs(CPDF_RenderOptions::kAlpha) &&
       !loader_->GetMask()) {
     return StartBitmapAlpha();

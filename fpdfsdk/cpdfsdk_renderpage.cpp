@@ -18,6 +18,13 @@
 #include "core/fxge/cfx_renderdevice.h"
 #include "fpdfsdk/cpdfsdk_helpers.h"
 #include "fpdfsdk/cpdfsdk_pauseadapter.h"
+#include "core/fpdfapi/render/cpdf_renderstatus.h"  // [AP-FORM-IMAGE-WATERMARK]
+#include "core/fpdfapi/render/cpdf_rendercontext.h"  // [AP-FORM-IMAGE-WATERMARK]
+#include "platform/shared/logger.h"  // [AP-FORM-IMAGE-WATERMARK]
+
+// [AP-FORM-IMAGE-WATERMARK] 全局回调实例
+// 实际类型为 CPDF_RenderStatus::ImageCallbackIface*
+static void* g_ap_form_image_callback = nullptr;
 
 namespace {
 
@@ -64,6 +71,16 @@ void RenderPageImpl(CPDF_PageRenderContext* pContext,
   pContext->context_ = std::make_unique<CPDF_RenderContext>(
       pPage->GetDocument(), pPage->GetMutablePageResources(),
       pPage->GetPageImageCache());
+  
+  // [AP-FORM-IMAGE-WATERMARK] 设置回调
+  LOG_DEBUG_F("[AP-FORM-IMAGE-WATERMARK] RenderPageImpl: g_ap_form_image_callback=%s",
+              (g_ap_form_image_callback ? "valid" : "null"));
+  if (g_ap_form_image_callback) {
+    pContext->context_->SetImageCallback(g_ap_form_image_callback);
+    LOG_DEBUG_F("[AP-FORM-IMAGE-WATERMARK] Set callback to RenderContext");
+  } else {
+    LOG_WARNING_F("[AP-FORM-IMAGE-WATERMARK] Global callback is null, cannot set!");
+  }
 
   pContext->context_->AppendLayer(pPage, matrix);
 
@@ -117,4 +134,11 @@ void CPDFSDK_RenderPageWithContext(CPDF_PageRenderContext* pContext,
   const FX_RECT rect(start_x, start_y, start_x + size_x, start_y + size_y);
   RenderPageImpl(pContext, pPage, pPage->GetDisplayMatrixForRect(rect, rotate),
                  rect, flags, color_scheme, need_to_restore, pause);
+}
+
+// [AP-FORM-IMAGE-WATERMARK] 设置全局 ap-form 图片回调
+void CPDFSDK_SetApFormImageCallback(void* pCallback) {
+  LOG_INFO_F("[AP-FORM-IMAGE-WATERMARK] Setting global callback: %s",
+             (pCallback ? "valid" : "null"));
+  g_ap_form_image_callback = pCallback;
 }

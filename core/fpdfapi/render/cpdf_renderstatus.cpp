@@ -72,6 +72,7 @@
 #include "core/fxge/renderdevicedriver_iface.h"
 #include "core/fxge/text_char_pos.h"
 #include "core/fxge/text_glyph_pos.h"
+#include "platform/shared/logger.h"  // [AP-FORM-IMAGE-WATERMARK]
 
 #if BUILDFLAG(IS_WIN)
 #include "core/fpdfapi/render/cpdf_scaledrenderbuffer.h"
@@ -404,6 +405,27 @@ bool CPDF_RenderStatus::ProcessForm(const CPDF_FormObject* pFormObj,
   CFX_Matrix matrix = pFormObj->form_matrix() * mtObj2Device;
   RetainPtr<const CPDF_Dictionary> pResources =
       pFormObj->form()->GetDict()->GetDictFor("Resources");
+
+  // [AP-FORM-IMAGE-WATERMARK] 检测是否为 ap-form
+  bool is_annotation_form = false;
+  if (pResources) {
+    const CPDF_Dictionary* parent_res = GetFormResource();
+    const CPDF_Dictionary* page_res = GetPageResource();
+    // 如果 Form 的资源字典与父级资源字典不同，则可能是注释的外观流
+    if (!parent_res || (parent_res != page_res && page_res)) {
+      is_annotation_form = true;
+      LOG_INFO_F("[AP-FORM-IMAGE-WATERMARK] Detected ap-form");
+    }
+  }
+
+  // [AP-FORM-IMAGE-WATERMARK] 调试：在传播前检查回调状态
+  LOG_DEBUG_F(
+      "[AP-FORM-IMAGE-WATERMARK] ProcessForm: image_callback_=%s, "
+      "in_appearance_form_=%s, is_annotation_form=%s",
+      (image_callback_ ? "valid" : "null"),
+      (in_appearance_form_ ? "true" : "false"),
+      (is_annotation_form ? "true" : "false"));
+
   CPDF_RenderStatus status(context_, device_);
   status.SetOptions(options_);
   status.SetStopObject(stop_obj_);
@@ -411,6 +433,19 @@ bool CPDF_RenderStatus::ProcessForm(const CPDF_FormObject* pFormObj,
   status.SetDropObjects(drop_objects_);
   status.SetFormResource(std::move(pResources));
   status.SetInGroup(in_group_);
+
+  // [AP-FORM-IMAGE-WATERMARK] 传播回调和标志
+  if (image_callback_) {
+    status.SetImageCallback(image_callback_);
+    LOG_DEBUG_F(
+        "[AP-FORM-IMAGE-WATERMARK] Propagated callback to child status");
+  }
+  if (in_appearance_form_ || is_annotation_form) {
+    status.SetInAppearanceForm(true);
+    LOG_DEBUG_F(
+        "[AP-FORM-IMAGE-WATERMARK] Set child status in_appearance_form=true");
+  }
+
   status.Initialize(this, &pFormObj->graphic_states());
   {
     CFX_RenderDevice::StateRestorer restorer(device_);

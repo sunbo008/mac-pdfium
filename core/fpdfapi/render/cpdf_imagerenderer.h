@@ -108,6 +108,9 @@ class CPDF_ImageRenderer {
   bool pattern_color_ = false;
   bool std_cs_ = false;
   bool result_ = true;
+  void* image_callback_ = nullptr;   // [AP-FORM-IMAGE-WATERMARK]
+                                     // CPDF_RenderStatus::ImageCallbackIface*
+  bool in_appearance_form_ = false;  // [AP-FORM-IMAGE-WATERMARK]
 };
 
 #endif  // CORE_FPDFAPI_RENDER_CPDF_IMAGERENDERER_H_

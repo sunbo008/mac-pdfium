@@ -3,26 +3,28 @@
 // - 启动后弹出选择 PDF，渲染到窗口
 // - 支持 Home/End 翻页、PgUp/PgDn、Cmd +/- 缩放
 //
-#include "../shared/pdf_utils.h"
-#include "../shared/pdfium_object_info.h"
-#include "../shared/logger.h"
 #import <Cocoa/Cocoa.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
-#include "public/fpdf_doc.h"
-#include "public/fpdf_edit.h"
-#include "public/fpdf_text.h"
-#include "public/fpdfview.h"
 #include <mach/mach.h>
 #include <chrono>
 #include <string>
 #include <vector>
+#include "../shared/logger.h"
+#include "../shared/pdf_utils.h"
+#include "../shared/pdfium_object_info.h"
+#include "../shared/watermark_callback.h"  // [AP-FORM-IMAGE-WATERMARK]
+#include "fpdfsdk/cpdfsdk_renderpage.h"    // [AP-FORM-IMAGE-WATERMARK]
+#include "public/fpdf_doc.h"
+#include "public/fpdf_edit.h"
+#include "public/fpdf_text.h"
+#include "public/fpdfview.h"
 
 // ================= 界面布局常量 =================
 static const CGFloat kBookmarkCollapsedWidth = 20.0;
 static const CGFloat kBookmarkExpandedWidth = 260.0;
 static const CGFloat kInspectorWidth = 300.0;
 static const CGFloat kControlBarHeight = 30.0;
-static const CGFloat kScrollBarWidth = 15.0; // 垂直滚动条宽度
+static const CGFloat kScrollBarWidth = 15.0;  // 垂直滚动条宽度
 
 // ================= 日志子系统（与 Windows 对齐） =================
 #if !defined(PDFWV_ENABLE_LOGGING)
@@ -34,8 +36,9 @@ enum class LogLevel { Critical, Error, Warning, Debug, Trace };
 static inline double NowSeconds() {
   static double sStart = 0.0;
   double t = CFAbsoluteTimeGetCurrent();
-  if (sStart == 0.0)
+  if (sStart == 0.0) {
     sStart = t;
+  }
   return t - sStart;
 }
 
@@ -57,19 +60,21 @@ static inline double GetProcessMemMB() {
 }
 
 // 将 wchar_t* 安全转换为 NSString（兼容 macOS 上 4 字节 wchar_t）
-static inline NSString *NSStringFromWChar(const wchar_t *ws) {
-  if (!ws)
+static inline NSString* NSStringFromWChar(const wchar_t* ws) {
+  if (!ws) {
     return @"";
+  }
   size_t len = wcslen(ws);
-  if (len == 0)
+  if (len == 0) {
     return @"";
+  }
   CFStringRef cfs = nullptr;
   if (sizeof(wchar_t) == 4) {
-    cfs = CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)ws,
+    cfs = CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8*)ws,
                                   (CFIndex)(len * 4), kCFStringEncodingUTF32LE,
                                   false);
   } else {
-    cfs = CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)ws,
+    cfs = CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8*)ws,
                                   (CFIndex)(len * 2), kCFStringEncodingUTF16LE,
                                   false);
   }
@@ -78,18 +83,18 @@ static inline NSString *NSStringFromWChar(const wchar_t *ws) {
 
 // 提前定义全局日志窗口指针，供窗口委托关闭时访问
 @class _LogWindowController;
-static _LogWindowController *_gLogCtrl = nil;
+static _LogWindowController* _gLogCtrl = nil;
 
-@interface _LogWindowController
-    : NSWindowController <NSTableViewDataSource, NSTableViewDelegate,
-                          NSWindowDelegate>
-@property(nonatomic, strong) NSButton *enableButton;
-@property(nonatomic, strong) NSButton *clearButton;
-@property(nonatomic, strong) NSTableView *table;
-@property(nonatomic, strong) NSMutableArray<NSDictionary *> *rows;
-@property(nonatomic, strong) NSPopUpButton *filter;
+@interface _LogWindowController : NSWindowController <NSTableViewDataSource,
+                                                      NSTableViewDelegate,
+                                                      NSWindowDelegate>
+@property(nonatomic, strong) NSButton* enableButton;
+@property(nonatomic, strong) NSButton* clearButton;
+@property(nonatomic, strong) NSTableView* table;
+@property(nonatomic, strong) NSMutableArray<NSDictionary*>* rows;
+@property(nonatomic, strong) NSPopUpButton* filter;
 // NSWindowDelegate
-- (void)windowWillClose:(NSNotification *)notification;
+- (void)windowWillClose:(NSNotification*)notification;
 @end
 
 // 前向声明内部日志开关函数，避免在方法体里临时 extern 声明
@@ -99,7 +104,7 @@ static void MacLog_SetEnabled(bool on);
 @implementation _LogWindowController
 - (instancetype)init {
   NSRect rc = NSMakeRect(200, 200, 900, 600);
-  NSWindow *w = [[NSWindow alloc]
+  NSWindow* w = [[NSWindow alloc]
       initWithContentRect:rc
                 styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                            NSWindowStyleMaskResizable)
@@ -108,21 +113,21 @@ static void MacLog_SetEnabled(bool on);
   if (self = [super initWithWindow:w]) {
     w.delegate = (id<NSWindowDelegate>)self;
     self.rows = [NSMutableArray new];
-    NSView *c = w.contentView;
-    NSButton *en = [NSButton checkboxWithTitle:@"Enable logging"
+    NSView* c = w.contentView;
+    NSButton* en = [NSButton checkboxWithTitle:@"Enable logging"
                                         target:self
                                         action:@selector(onToggle:)];
     en.frame = NSMakeRect(12, rc.size.height - 36, 140, 24);
     [c addSubview:en];
     self.enableButton = en;
-    NSButton *cl = [NSButton buttonWithTitle:@"Clear"
+    NSButton* cl = [NSButton buttonWithTitle:@"Clear"
                                       target:self
                                       action:@selector(onClear:)];
     cl.frame = NSMakeRect(160, rc.size.height - 36, 80, 24);
     [c addSubview:cl];
     self.clearButton = cl;
     // 过滤按钮
-    NSPopUpButton *filt = [[NSPopUpButton alloc]
+    NSPopUpButton* filt = [[NSPopUpButton alloc]
         initWithFrame:NSMakeRect(250, rc.size.height - 36, 160, 24)
             pullsDown:NO];
     [filt addItemsWithTitles:@[ @"All", @"Debug", @"Perf" ]];
@@ -131,16 +136,16 @@ static void MacLog_SetEnabled(bool on);
     [c addSubview:filt];
     _filter = filt;
 
-    NSScrollView *sv =
+    NSScrollView* sv =
         [[NSScrollView alloc] initWithFrame:NSMakeRect(8, 8, rc.size.width - 16,
                                                        rc.size.height - 56)];
     sv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    NSTableView *tv = [[NSTableView alloc] initWithFrame:sv.bounds];
+    NSTableView* tv = [[NSTableView alloc] initWithFrame:sv.bounds];
     tv.usesAlternatingRowBackgroundColors = YES;
     tv.delegate = self;
     tv.dataSource = self;
-    auto addCol = ^(NSString *idt, NSString *title, CGFloat w) {
-      NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:idt];
+    auto addCol = ^(NSString* idt, NSString* title, CGFloat w) {
+      NSTableColumn* col = [[NSTableColumn alloc] initWithIdentifier:idt];
       col.title = title;
       col.width = w;
       [tv addTableColumn:col];
@@ -162,29 +167,31 @@ static void MacLog_SetEnabled(bool on);
   return self;
 }
 
-- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
-  if (_filter.indexOfSelectedItem == 0)
+- (NSInteger)numberOfRowsInTableView:(NSTableView*)tableView {
+  if (_filter.indexOfSelectedItem == 0) {
     return (NSInteger)self.rows.count;
-  NSString *key =
+  }
+  NSString* key =
       (_filter.indexOfSelectedItem == 1) ? @"Debug:跟踪" : @"Debug:渲染性能";
   __block NSInteger cnt = 0;
-  [self.rows enumerateObjectsUsingBlock:^(NSDictionary *_Nonnull d,
-                                          NSUInteger idx, BOOL *_Nonnull stop) {
-    if ([d[@"Level"] isEqualToString:key])
+  [self.rows enumerateObjectsUsingBlock:^(NSDictionary* _Nonnull d,
+                                          NSUInteger idx, BOOL* _Nonnull stop) {
+    if ([d[@"Level"] isEqualToString:key]) {
       ++cnt;
+    }
   }];
   return cnt;
 }
-- (NSView *)tableView:(NSTableView *)tableView
-    viewForTableColumn:(NSTableColumn *)tableColumn
+- (NSView*)tableView:(NSTableView*)tableView
+    viewForTableColumn:(NSTableColumn*)tableColumn
                    row:(NSInteger)row {
-  NSTableCellView *cell =
+  NSTableCellView* cell =
       [tableView makeViewWithIdentifier:tableColumn.identifier owner:self];
   if (!cell) {
     cell = [[NSTableCellView alloc]
         initWithFrame:NSMakeRect(0, 0, tableColumn.width, 20)];
     cell.identifier = tableColumn.identifier;
-    NSTextField *tf = [[NSTextField alloc] initWithFrame:cell.bounds];
+    NSTextField* tf = [[NSTextField alloc] initWithFrame:cell.bounds];
     tf.bezeled = NO;
     tf.drawsBackground = NO;
     tf.editable = NO;
@@ -194,14 +201,14 @@ static void MacLog_SetEnabled(bool on);
     [cell addSubview:tf];
   }
   // 简单过滤：重新选择时 table 会刷新，这里按顺序取匹配项
-  NSDictionary *d = nil;
+  NSDictionary* d = nil;
   if (_filter.indexOfSelectedItem == 0) {
     d = self.rows[(NSUInteger)row];
   } else {
-    NSString *key =
+    NSString* key =
         (_filter.indexOfSelectedItem == 1) ? @"Debug:跟踪" : @"Debug:渲染性能";
     NSInteger idx = -1;
-    for (NSDictionary *it in self.rows) {
+    for (NSDictionary* it in self.rows) {
       if ([it[@"Level"] isEqualToString:key]) {
         ++idx;
         if (idx == row) {
@@ -210,19 +217,21 @@ static void MacLog_SetEnabled(bool on);
         }
       }
     }
-    if (!d)
+    if (!d) {
       d = @{};
+    }
   }
   cell.textField.stringValue = d[tableColumn.identifier] ?: @"";
   return cell;
 }
 
-- (void)appendRow:(NSDictionary *)row {
+- (void)appendRow:(NSDictionary*)row {
   [self.rows addObject:row];
   [self.table reloadData];
   NSInteger last = (NSInteger)self.rows.count - 1;
-  if (last >= 0)
+  if (last >= 0) {
     [self.table scrollRowToVisible:last];
+  }
 }
 
 - (void)onToggle:(id)sender {
@@ -236,20 +245,24 @@ static void MacLog_SetEnabled(bool on);
   [self.table reloadData];
 }
 // 关闭窗口即停止日志并释放控制器
-- (void)windowWillClose:(NSNotification *)notification {
+- (void)windowWillClose:(NSNotification*)notification {
   MacLog_SetEnabled(false);
   _gLogCtrl = nil;
 }
 @end
 
 // 默认启用日志记录（性能日志总是记录到文件，窗口显示可选）
-static bool &_LogEnabledRef() {
+static bool& _LogEnabledRef() {
   static bool e = true;  // 改为默认启用
   return e;
 }
 
-static bool MacLog_IsEnabled() { return _LogEnabledRef(); }
-static void MacLog_SetEnabled(bool on) { _LogEnabledRef() = on; }
+static bool MacLog_IsEnabled() {
+  return _LogEnabledRef();
+}
+static void MacLog_SetEnabled(bool on) {
+  _LogEnabledRef() = on;
+}
 static inline void MacLog_ShowWindow() {
   if (!_gLogCtrl) {
     _gLogCtrl = [_LogWindowController new];
@@ -259,21 +272,21 @@ static inline void MacLog_ShowWindow() {
       MacLog_IsEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
-static inline NSString *WFormat(const wchar_t *fmt, va_list ap) {
+static inline NSString* WFormat(const wchar_t* fmt, va_list ap) {
   wchar_t buf[1200];
   vswprintf(buf, 1199, fmt, ap);
   buf[1199] = 0;
-  return [[NSString alloc] initWithCharacters:(const unichar *)buf
+  return [[NSString alloc] initWithCharacters:(const unichar*)buf
                                        length:wcslen(buf)];
 }
 
-static inline NSString *ToNSString(double v, int prec) {
+static inline NSString* ToNSString(double v, int prec) {
   return [NSString
       stringWithFormat:(prec >= 0 ? [NSString stringWithFormat:@"%%.%df", prec]
                                   : @"%f"),
                        v];
 }
-static inline NSString *ToNSStringI(int v) {
+static inline NSString* ToNSStringI(int v) {
   return [NSString stringWithFormat:@"%d", v];
 }
 
@@ -281,22 +294,23 @@ static double _lastMemMB = 0.0;
 static double _openStartSec = 0.0;
 static bool _firstRenderAfterOpen = false;
 // 文件日志：路径与句柄
-static NSString *MacLog_FilePath() {
-  NSString *exec = [[NSBundle mainBundle] executablePath];
-  NSString *dir = [exec stringByDeletingLastPathComponent];
+static NSString* MacLog_FilePath() {
+  NSString* exec = [[NSBundle mainBundle] executablePath];
+  NSString* dir = [exec stringByDeletingLastPathComponent];
   return [dir stringByAppendingPathComponent:@"debug.log"];
 }
 static void MacLog_ResetFileOnStartup() {
-  NSString *path = MacLog_FilePath();
+  NSString* path = MacLog_FilePath();
   [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
   [@"" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
-static void MacLog_AppendLine(NSString *line) {
-  if (!line)
+static void MacLog_AppendLine(NSString* line) {
+  if (!line) {
     return;
-  NSString *s = [line stringByAppendingString:@"\n"];
-  NSData *data = [s dataUsingEncoding:NSUTF8StringEncoding];
-  NSFileHandle *fh =
+  }
+  NSString* s = [line stringByAppendingString:@"\n"];
+  NSData* data = [s dataUsingEncoding:NSUTF8StringEncoding];
+  NSFileHandle* fh =
       [NSFileHandle fileHandleForWritingAtPath:MacLog_FilePath()];
   if (!fh) {
     [[NSFileManager defaultManager] createFileAtPath:MacLog_FilePath()
@@ -308,25 +322,27 @@ static void MacLog_AppendLine(NSString *line) {
   [fh writeData:data];
   [fh closeFile];
 }
-static void MacLog_DebugNS(NSString *msg) {
-  if (!msg)
+static void MacLog_DebugNS(NSString* msg) {
+  if (!msg) {
     return;
+  }
   MacLog_AppendLine([@"[DBG] " stringByAppendingString:msg]);
 }
 
-static void Log_WriteF(LogLevel lv, const wchar_t *fmt, ...) {
+static void Log_WriteF(LogLevel lv, const wchar_t* fmt, ...) {
 #if PDFWV_ENABLE_LOGGING
-  if (!MacLog_IsEnabled())
+  if (!MacLog_IsEnabled()) {
     return;
+  }
   va_list ap;
   va_start(ap, fmt);
-  NSString *msg = WFormat(fmt, ap);
+  NSString* msg = WFormat(fmt, ap);
   va_end(ap);
   double el = NowSeconds();
   MacLog_AppendLine(
       [NSString stringWithFormat:@"[DBG] [+%7.3fs] %@", el, msg ?: @""]);
   if (_gLogCtrl) {
-    NSDictionary *row = @{
+    NSDictionary* row = @{
       @"Elapsed" : [NSString stringWithFormat:@"%7.3f s", el],
       @"Level" : @"Debug:跟踪",
       @"Page" : @"",
@@ -344,29 +360,35 @@ static void Log_WriteF(LogLevel lv, const wchar_t *fmt, ...) {
 #endif
 }
 
-static void Log_WritePerfEx(int page, double zoomPct, double timeMs,
-                            double memMB, double deltaMB,
-                            const wchar_t *remarks, const char *file, int line,
-                            const char *func) {
+static void Log_WritePerfEx(int page,
+                            double zoomPct,
+                            double timeMs,
+                            double memMB,
+                            double deltaMB,
+                            const wchar_t* remarks,
+                            const char* file,
+                            int line,
+                            const char* func) {
 #if PDFWV_ENABLE_LOGGING
-  if (!MacLog_IsEnabled())
+  if (!MacLog_IsEnabled()) {
     return;
+  }
   double el = NowSeconds();
-  NSString *lvl = @"Debug:渲染性能";
-  NSString *zoom = [NSString stringWithFormat:@"%.0f%%", zoomPct];
-  NSString *tms = ToNSString(timeMs, 2);
-  NSString *mem = ToNSString(memMB, 2);
-  NSString *dmem = ToNSString(deltaMB, 2);
-  NSString *src = [NSString
+  NSString* lvl = @"Debug:渲染性能";
+  NSString* zoom = [NSString stringWithFormat:@"%.0f%%", zoomPct];
+  NSString* tms = ToNSString(timeMs, 2);
+  NSString* mem = ToNSString(memMB, 2);
+  NSString* dmem = ToNSString(deltaMB, 2);
+  NSString* src = [NSString
       stringWithFormat:@"%s:%d %s", file ? file : "", line, func ? func : ""];
-  NSString *rem = [NSString
+  NSString* rem = [NSString
       stringWithFormat:@"%@%@%s", NSStringFromWChar(remarks),
                        (remarks && remarks[0] ? @" | " : @""), src.UTF8String];
   MacLog_AppendLine([NSString
       stringWithFormat:@"[PERF] [+%7.3fs] p=%d z=%@ t=%@ mem=%@ dmem=%@ | %@",
                        el, page, zoom, tms, mem, dmem, rem]);
   if (_gLogCtrl) {
-    NSDictionary *row = @{
+    NSDictionary* row = @{
       @"Elapsed" : [NSString stringWithFormat:@"%7.3f s", el],
       @"Level" : lvl,
       @"Page" : ToNSStringI(page),
@@ -391,71 +413,77 @@ static void Log_WritePerfEx(int page, double zoomPct, double timeMs,
 #endif
 }
 
-static void Log_WritePerf(int page, double zoomPct, double timeMs, double memMB,
+static void Log_WritePerf(int page,
+                          double zoomPct,
+                          double timeMs,
+                          double memMB,
                           double deltaMB) {
   Log_WritePerfEx(page, zoomPct, timeMs, memMB, deltaMB, L"渲染单页统计",
                   __FILE__, __LINE__, __FUNCTION__);
 }
 
 #if PDFWV_ENABLE_LOGGING
-#define LOGF(lv, fmt, ...)                                                     \
-  do {                                                                         \
-    if (MacLog_IsEnabled())                                                    \
-      Log_WriteF((lv), L##fmt, ##__VA_ARGS__);                                 \
+#define LOGF(lv, fmt, ...)                     \
+  do {                                         \
+    if (MacLog_IsEnabled())                    \
+      Log_WriteF((lv), L##fmt, ##__VA_ARGS__); \
   } while (0)
-#define LOGM(lv, msg)                                                          \
-  do {                                                                         \
-    if (MacLog_IsEnabled())                                                    \
-      Log_WriteF((lv), L"%s", L##msg);                                         \
+#define LOGM(lv, msg)                  \
+  do {                                 \
+    if (MacLog_IsEnabled())            \
+      Log_WriteF((lv), L"%s", L##msg); \
   } while (0)
 #else
-#define LOGF(...)                                                              \
-  do {                                                                         \
+#define LOGF(...) \
+  do {            \
   } while (0)
-#define LOGM(...)                                                              \
-  do {                                                                         \
+#define LOGM(...) \
+  do {            \
   } while (0)
 #endif
 
-static inline void Log_ShowWindow() { MacLog_ShowWindow(); }
+static inline void Log_ShowWindow() {
+  MacLog_ShowWindow();
+}
 
 // ================= PDFium 错误辅助 =================
-static inline void LogFPDFLastError(const char *where) {
+static inline void LogFPDFLastError(const char* where) {
   unsigned long code = FPDF_GetLastError();
-  const char *msg = "Unknown";
+  const char* msg = "Unknown";
   switch (code) {
-  case FPDF_ERR_SUCCESS:
-    msg = "SUCCESS";
-    break;
-  case FPDF_ERR_UNKNOWN:
-    msg = "UNKNOWN";
-    break;
-  case FPDF_ERR_FILE:
-    msg = "FILE";
-    break;
-  case FPDF_ERR_FORMAT:
-    msg = "FORMAT";
-    break;
-  case FPDF_ERR_PASSWORD:
-    msg = "PASSWORD";
-    break;
-  case FPDF_ERR_SECURITY:
-    msg = "SECURITY";
-    break;
-  case FPDF_ERR_PAGE:
-    msg = "PAGE";
-    break;
-  default:
-    break;
+    case FPDF_ERR_SUCCESS:
+      msg = "SUCCESS";
+      break;
+    case FPDF_ERR_UNKNOWN:
+      msg = "UNKNOWN";
+      break;
+    case FPDF_ERR_FILE:
+      msg = "FILE";
+      break;
+    case FPDF_ERR_FORMAT:
+      msg = "FORMAT";
+      break;
+    case FPDF_ERR_PASSWORD:
+      msg = "PASSWORD";
+      break;
+    case FPDF_ERR_SECURITY:
+      msg = "SECURITY";
+      break;
+    case FPDF_ERR_PAGE:
+      msg = "PAGE";
+      break;
+    default:
+      break;
   }
   NSLog(@"[PdfWinViewer] PDFium error at %s: %lu (%@)", where, code,
         [NSString stringWithUTF8String:msg]);
 }
 
-static inline std::string NSStringToUTF8(NSObject *obj) {
-  if (!obj)
+static inline std::string NSStringToUTF8(NSObject* obj) {
+  if (!obj) {
     return {};
-  NSString *s = (NSString *)obj;
+  }
+  NSString* s = (NSString*)obj;
   return std::string([s UTF8String] ?: "");
 }
 
@@ -463,20 +491,20 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 @protocol PdfViewDelegate <NSObject>
 @optional
 - (void)pdfViewDidChangePage:(id)sender;
-- (void)pdfViewDidClickObject:(NSValue *)objectValue atIndex:(NSNumber *)index;
+- (void)pdfViewDidClickObject:(NSValue*)objectValue atIndex:(NSNumber*)index;
 @end
 
 @interface PdfView : NSView
 @property(nonatomic, assign) id<PdfViewDelegate> delegate;
-- (BOOL)openPDFAtPath:(NSString *)path;
+- (BOOL)openPDFAtPath:(NSString*)path;
 - (FPDF_DOCUMENT)document;
 - (void)goToPage:(int)index;
-- (int)currentPageIndex;         // 获取当前页索引（0开始）
-- (NSSize)currentPageSizePt;     // 当前页 PDF 尺寸（pt）
-- (void)updateViewSizeToFitPage; // 根据页尺寸与缩放调整自身 frame
-                                 // 大小（供滚动容器使用）
-- (BOOL)findText:(NSString *)searchText
-       fromIndex:(NSNumber *)startIndex; // 文本查找功能
+- (int)currentPageIndex;          // 获取当前页索引（0开始）
+- (NSSize)currentPageSizePt;      // 当前页 PDF 尺寸（pt）
+- (void)updateViewSizeToFitPage;  // 根据页尺寸与缩放调整自身 frame
+                                  // 大小（供滚动容器使用）
+- (BOOL)findText:(NSString*)searchText
+       fromIndex:(NSNumber*)startIndex;  // 文本查找功能
 @end
 
 @implementation PdfView {
@@ -487,8 +515,8 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   bool _selecting;
   NSPoint _selStart;
   NSPoint _selEnd;
-  NSPoint _lastContextPt;    // 最近一次右键菜单触发位置（视图坐标）
-  BOOL _lastContextHitImage; // 最近一次右键是否命中图片
+  NSPoint _lastContextPt;  // 最近一次右键菜单触发位置（视图坐标）
+  BOOL _lastContextHitImage;  // 最近一次右键是否命中图片
 }
 - (NSPoint)toPagePxFromView:(NSPoint)viewPt {
   // Convert view coordinates to page coordinates (in points)
@@ -520,14 +548,17 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   return _pageIndex;
 }
 - (void)goToPage:(int)index {
-  if (!_doc)
+  if (!_doc) {
     return;
+  }
   int pc = FPDF_GetPageCount(_doc);
   if (pc > 0) {
-    if (index < 0)
+    if (index < 0) {
       index = 0;
-    if (index >= pc)
+    }
+    if (index >= pc) {
       index = pc - 1;
+    }
     int oldIndex = _pageIndex;
     _pageIndex = index;
     [self setNeedsDisplay:YES];
@@ -554,18 +585,18 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   return YES;
 }
 
-- (BOOL)openPDFAtPath:(NSString *)path {
+- (BOOL)openPDFAtPath:(NSString*)path {
   NSLog(@"[PdfWinViewer] openPDFAtPath: %@", path);
-  
+
   // 记录开始时间
   auto startTime = std::chrono::steady_clock::now();
-  
+
   // 使用新日志模块记录打开文件
   LOG_INFO_F("========================================");
   LOG_INFO_F("正在打开 PDF 文件：%s", [path UTF8String]);
   LOG_DEBUG_F("文件完整路径：%s", [path UTF8String]);
   LOG_DEBUG_F("文件名：%s", [[path lastPathComponent] UTF8String]);
-  
+
   if (_doc) {
     LOG_DEBUG("关闭之前打开的文档");
     FPDF_CloseDocument(_doc);
@@ -577,28 +608,32 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   FPDF_LIBRARY_CONFIG cfg{};
   cfg.version = 3;
   FPDF_InitLibraryWithConfig(&cfg);
-  
+
   LOG_DEBUG("调用 FPDF_LoadDocument");
   auto loadStartTime = std::chrono::steady_clock::now();
   _doc = FPDF_LoadDocument(u8.c_str(), nullptr);
   auto loadEndTime = std::chrono::steady_clock::now();
-  
+
   if (!_doc) {
     LOG_ERROR_F("打开 PDF 文件失败：%s", [path UTF8String]);
     LogFPDFLastError("FPDF_LoadDocument");
     return NO;
   }
-  
-  double loadTimeMs = std::chrono::duration<double, std::milli>(loadEndTime - loadStartTime).count();
-  
+
+  double loadTimeMs =
+      std::chrono::duration<double, std::milli>(loadEndTime - loadStartTime)
+          .count();
+
   int pc = FPDF_GetPageCount(_doc);
-  
+
   // 计算总耗时
   auto endTime = std::chrono::steady_clock::now();
-  double totalTimeMs = std::chrono::duration<double, std::milli>(endTime - startTime).count();
-  
+  double totalTimeMs =
+      std::chrono::duration<double, std::milli>(endTime - startTime).count();
+
   LOG_INFO_F("PDF 文件打开成功，共 %d 页", pc);
-  LOG_INFO_F("⏱️  文档加载耗时：%.2f ms（FPDF_LoadDocument: %.2f ms）", totalTimeMs, loadTimeMs);
+  LOG_INFO_F("⏱️  文档加载耗时：%.2f ms（FPDF_LoadDocument: %.2f ms）",
+             totalTimeMs, loadTimeMs);
   NSLog(@"[PdfWinViewer] document loaded. pageCount=%d", pc);
 // 首次渲染计时起点（只要编译时启用日志就记录，运行时再判断是否输出）
 #if PDFWV_ENABLE_LOGGING
@@ -612,8 +647,9 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 }
 
 - (NSSize)currentPageSizePt {
-  if (!_doc)
+  if (!_doc) {
     return NSMakeSize(0, 0);
+  }
   double wpt = 0, hpt = 0;
   FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
   return NSMakeSize((CGFloat)wpt, (CGFloat)hpt);
@@ -621,16 +657,18 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 
 - (void)updateViewSizeToFitPage {
   NSSize s = [self currentPageSizePt];
-  if (s.width <= 0 || s.height <= 0)
+  if (s.width <= 0 || s.height <= 0) {
     return;
+  }
   [self setFrameSize:NSMakeSize((CGFloat)(s.width * _zoom),
                                 (CGFloat)(s.height * _zoom))];
 }
 
-- (void)keyDown:(NSEvent *)event {
-  if (!_doc)
+- (void)keyDown:(NSEvent*)event {
+  if (!_doc) {
     return;
-  NSString *chars = [event charactersIgnoringModifiers];
+  }
+  NSString* chars = [event charactersIgnoringModifiers];
   unichar c = chars.length ? [chars characterAtIndex:0] : 0;
   NSEventModifierFlags mods =
       event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
@@ -669,26 +707,28 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   }
   int oldIndex = _pageIndex;
   switch (c) {
-  case NSHomeFunctionKey:
-    _pageIndex = 0;
-    break;
-  case NSEndFunctionKey: {
-    int pc = FPDF_GetPageCount(_doc);
-    if (pc > 0)
-      _pageIndex = pc - 1;
-    break;
-  }
-  case NSPageUpFunctionKey:
-    _pageIndex = (_pageIndex > 0) ? _pageIndex - 1 : 0;
-    break;
-  case NSPageDownFunctionKey: {
-    int pc = FPDF_GetPageCount(_doc);
-    if (pc > 0 && _pageIndex < pc - 1)
-      _pageIndex++;
-    break;
-  }
-  default:
-    break;
+    case NSHomeFunctionKey:
+      _pageIndex = 0;
+      break;
+    case NSEndFunctionKey: {
+      int pc = FPDF_GetPageCount(_doc);
+      if (pc > 0) {
+        _pageIndex = pc - 1;
+      }
+      break;
+    }
+    case NSPageUpFunctionKey:
+      _pageIndex = (_pageIndex > 0) ? _pageIndex - 1 : 0;
+      break;
+    case NSPageDownFunctionKey: {
+      int pc = FPDF_GetPageCount(_doc);
+      if (pc > 0 && _pageIndex < pc - 1) {
+        _pageIndex++;
+      }
+      break;
+    }
+    default:
+      break;
   }
   [self setNeedsDisplay:YES];
   // 如果页面发生了变化，通知delegate
@@ -781,7 +821,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   [self exportCurrentPagePNG];
 }
 
-- (void)magnifyWithEvent:(NSEvent *)event {
+- (void)magnifyWithEvent:(NSEvent*)event {
   // 触控板捏合缩放
   _zoom = std::max(0.1, std::min(8.0, _zoom * (1.0 + event.magnification)));
   [self updateViewSizeToFitPage];
@@ -792,15 +832,19 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   [super drawRect:dirtyRect];
   [[NSColor whiteColor] setFill];
   NSRectFill(self.bounds);
-  if (!_doc)
+  if (!_doc) {
     return;
+  }
   int pageCount = FPDF_GetPageCount(_doc);
-  if (pageCount <= 0)
+  if (pageCount <= 0) {
     return;
-  if (_pageIndex < 0)
+  }
+  if (_pageIndex < 0) {
     _pageIndex = 0;
-  if (_pageIndex >= pageCount)
+  }
+  if (_pageIndex >= pageCount) {
     _pageIndex = pageCount - 1;
+  }
 
   FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
   if (!page) {
@@ -831,7 +875,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
         NULL, buffer.data(), (size_t)buffer.size(), NULL);
     CGBitmapInfo bi =
         (CGBitmapInfo)((uint32_t)kCGBitmapByteOrder32Little |
-                       (uint32_t)kCGImageAlphaPremultipliedFirst); // BGRA
+                       (uint32_t)kCGImageAlphaPremultipliedFirst);  // BGRA
     CGImageRef img = CGImageCreate(pxW, pxH, 8, 32, pxW * 4, cs, bi, dp, NULL,
                                    false, kCGRenderingIntentDefault);
     // 以点（pt）为单位的目标绘制尺寸，并对齐到像素边界
@@ -877,7 +921,8 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
     _lastMemMB = curMB;
     if (_firstRenderAfterOpen) {
       double openMs = (t1 - _openStartSec) * 1000.0;
-      LOG_INFO_F("🎨 首次渲染完成 - 页面 %d，缩放 %.0f%%，耗时 %.2f ms（从打开到首次显示）", 
+      LOG_INFO_F("🎨 首次渲染完成 - 页面 %d，缩放 %.0f%%，耗时 %.2f "
+                 "ms（从打开到首次显示）",
                  _pageIndex + 1, _zoom * 100.0, openMs);
       Log_WritePerfEx(_pageIndex + 1, _zoom * 100.0, openMs, curMB, dMB,
                       L"打开PDF→首次渲染", __FILE__, __LINE__, __FUNCTION__);
@@ -885,7 +930,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
     } else {
       // 只在耗时较长时记录，避免日志过多
       if (ms > 30.0) {  // 超过 30ms 才记录
-        LOG_DEBUG_F("🎨 页面渲染 - 页面 %d，缩放 %.0f%%，耗时 %.2f ms", 
+        LOG_DEBUG_F("🎨 页面渲染 - 页面 %d，缩放 %.0f%%，耗时 %.2f ms",
                     _pageIndex + 1, _zoom * 100.0, ms);
       }
       Log_WritePerf(_pageIndex + 1, _zoom * 100.0, ms, curMB, dMB);
@@ -896,25 +941,28 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 
 #pragma mark - Mouse events for selection and link navigation
 
-- (void)mouseDown:(NSEvent *)event {
-  if (!_doc)
+- (void)mouseDown:(NSEvent*)event {
+  if (!_doc) {
     return;
+  }
   _selecting = true;
   _selStart = [self convertPoint:event.locationInWindow fromView:nil];
   _selEnd = _selStart;
   [self setNeedsDisplay:YES];
 }
 
-- (void)mouseDragged:(NSEvent *)event {
-  if (!_doc || !_selecting)
+- (void)mouseDragged:(NSEvent*)event {
+  if (!_doc || !_selecting) {
     return;
+  }
   _selEnd = [self convertPoint:event.locationInWindow fromView:nil];
   [self setNeedsDisplay:YES];
 }
 
-- (void)mouseUp:(NSEvent *)event {
-  if (!_doc)
+- (void)mouseUp:(NSEvent*)event {
+  if (!_doc) {
     return;
+  }
   NSPoint up = [self convertPoint:event.locationInWindow fromView:nil];
   if (_selecting) {
     _selEnd = up;
@@ -929,7 +977,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   }
 }
 
-- (void)rightMouseDown:(NSEvent *)event {
+- (void)rightMouseDown:(NSEvent*)event {
   if (!_doc) {
     MacLog_DebugNS(@"[context] blocked: no document");
     return;
@@ -957,8 +1005,9 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
     int imageObjs = 0;
     for (int i = 0; i < totalObjs; i++) {
       FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
-      if (obj && FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_IMAGE)
+      if (obj && FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_IMAGE) {
         imageObjs++;
+      }
     }
     MacLog_DebugNS([NSString
         stringWithFormat:
@@ -1021,25 +1070,25 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
     FPDF_ClosePage(page);
   }
   _lastContextHitImage = hitImage;
-  NSString *ctxLine =
+  NSString* ctxLine =
       [NSString stringWithFormat:@"[context] doc=%@ page=%d view=(%.1f,%.1f) "
                                  @"pageXY=(%.1f,%.1f) hitImage=%@",
                                  _doc ? @"YES" : @"NO", _pageIndex, pt.x, pt.y,
                                  px, py, hitImage ? @"YES" : @"NO"];
   NSLog(@"[PdfWinViewer] %@", ctxLine);
   MacLog_DebugNS(ctxLine);
-  NSMenu *menu = [[NSMenu alloc] initWithTitle:@""];
-  menu.autoenablesItems = NO; // 禁用自动启用，手动控制菜单项状态
+  NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
+  menu.autoenablesItems = NO;  // 禁用自动启用，手动控制菜单项状态
   [menu addItemWithTitle:@"复制选中文本"
                   action:@selector(copySelectionToPasteboard)
            keyEquivalent:@""];
   [menu addItem:[NSMenuItem separatorItem]];
-  NSMenuItem *expPage = [menu addItemWithTitle:@"导出当前页 PNG"
+  NSMenuItem* expPage = [menu addItemWithTitle:@"导出当前页 PNG"
                                         action:@selector(exportCurrentPagePNG)
                                  keyEquivalent:@""];
   expPage.target = self;
   expPage.enabled = (_doc != nullptr);
-  NSMenuItem *saveImg = [menu addItemWithTitle:@"保存图片…"
+  NSMenuItem* saveImg = [menu addItemWithTitle:@"保存图片…"
                                         action:@selector(saveImageAtPoint:)
                                  keyEquivalent:@""];
   saveImg.target = self;
@@ -1049,17 +1098,19 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   [NSMenu popUpContextMenu:menu withEvent:event forView:self];
 }
 
-- (void)scrollWheel:(NSEvent *)event {
+- (void)scrollWheel:(NSEvent*)event {
   NSEventModifierFlags mods =
       event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
   if ((mods & NSEventModifierFlagCommand) != 0) {
     double delta = event.scrollingDeltaY;
-    if (event.hasPreciseScrollingDeltas)
+    if (event.hasPreciseScrollingDeltas) {
       delta *= 0.1;
-    if (delta > 0)
+    }
+    if (delta > 0) {
       _zoom = std::min(8.0, _zoom * 1.05);
-    else if (delta < 0)
+    } else if (delta < 0) {
       _zoom = std::max(0.1, _zoom / 1.05);
+    }
     [self updateViewSizeToFitPage];
     [self setNeedsDisplay:YES];
   } else {
@@ -1071,7 +1122,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   }
 }
 
-- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
+- (BOOL)validateMenuItem:(NSMenuItem*)menuItem {
   if (menuItem.action == @selector(copySelectionToPasteboard)) {
     return !NSEqualPoints(_selStart, _selEnd);
   }
@@ -1085,22 +1136,26 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 }
 
 - (void)copySelectionToPasteboard {
-  if (!_doc)
+  if (!_doc) {
     return;
-  NSString *text = [self extractSelectedText];
-  if (text.length == 0)
+  }
+  NSString* text = [self extractSelectedText];
+  if (text.length == 0) {
     return;
-  NSPasteboard *pb = [NSPasteboard generalPasteboard];
+  }
+  NSPasteboard* pb = [NSPasteboard generalPasteboard];
   [pb clearContents];
   [pb setString:text forType:NSPasteboardTypeString];
 }
 
-- (NSString *)extractSelectedText {
-  if (!_doc || NSEqualPoints(_selStart, _selEnd))
+- (NSString*)extractSelectedText {
+  if (!_doc || NSEqualPoints(_selStart, _selEnd)) {
     return @"";
+  }
   FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
-  if (!page)
+  if (!page) {
     return @"";
+  }
   double wpt = 0, hpt = 0;
   FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
   // 视图坐标 -> 页面像素坐标（与渲染一致）
@@ -1127,20 +1182,22 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   }
   std::vector<unsigned short> wbuf((size_t)n + 1, 0);
   FPDFText_GetBoundedText(tp, left, top, right, bottom,
-                          (unsigned short *)wbuf.data(), n);
+                          (unsigned short*)wbuf.data(), n);
   FPDFText_ClosePage(tp);
   FPDF_ClosePage(page);
-  NSString *s = [[NSString alloc] initWithCharacters:(unichar *)wbuf.data()
+  NSString* s = [[NSString alloc] initWithCharacters:(unichar*)wbuf.data()
                                               length:(NSUInteger)n];
   return s ?: @"";
 }
 
 - (void)tryNavigateLinkAtPoint:(NSPoint)viewPt {
-  if (!_doc)
+  if (!_doc) {
     return;
+  }
   FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
-  if (!page)
+  if (!page) {
     return;
+  }
   double wpt = 0, hpt = 0;
   FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
   int dpi = 72 * (int)ceil([self.window backingScaleFactor] ?: 2.0);
@@ -1151,8 +1208,9 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
     FPDF_DEST dest = FPDFLink_GetDest(_doc, link);
     if (!dest) {
       FPDF_ACTION act = FPDFLink_GetAction(link);
-      if (act)
+      if (act) {
         dest = FPDFAction_GetDest(_doc, act);
+      }
     }
     if (dest) {
       int pageIndex = FPDFDest_GetDestPageIndex(_doc, dest);
@@ -1166,12 +1224,13 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 }
 
 - (void)promptGotoPage {
-  if (!_doc)
+  if (!_doc) {
     return;
+  }
   NSInteger pc = FPDF_GetPageCount(_doc);
-  NSAlert *alert = [NSAlert new];
+  NSAlert* alert = [NSAlert new];
   alert.messageText = @"跳转到页";
-  NSTextField *tf =
+  NSTextField* tf =
       [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 24)];
   [tf setStringValue:[NSString stringWithFormat:@"%d", _pageIndex + 1]];
   alert.accessoryView = tf;
@@ -1182,16 +1241,16 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 
     // 边界检查：确保页码在有效范围内
     if (v < 1) {
-      v = 1; // 小于最小值时使用最小值
+      v = 1;  // 小于最小值时使用最小值
       NSLog(@"[PageNavigation] 输入页码小于1，调整为最小值: %ld", (long)v);
     } else if (v > pc) {
-      v = pc; // 大于最大值时使用最大值
+      v = pc;  // 大于最大值时使用最大值
       NSLog(@"[PageNavigation] 输入页码超过最大值%ld，调整为最大值: %ld",
             (long)pc, (long)v);
     }
 
     int oldIndex = _pageIndex;
-    _pageIndex = (int)v - 1; // 转换为0基索引
+    _pageIndex = (int)v - 1;  // 转换为0基索引
     NSLog(@"[PageNavigation] 设置页码为: %ld (索引: %d)", (long)v, _pageIndex);
     [self setNeedsDisplay:YES];
 
@@ -1205,11 +1264,13 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 - (BOOL)exportCurrentPagePNG {
   NSLog(@"[PdfWinViewer][exportPage] doc=%@ page=%d", _doc ? @"YES" : @"NO",
         _pageIndex);
-  if (!_doc)
+  if (!_doc) {
     return NO;
+  }
   FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
-  if (!page)
+  if (!page) {
     return NO;
+  }
   double wpt = 0, hpt = 0;
   FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
   int dpiX = 72 * (int)ceil([self.window backingScaleFactor] ?: 2.0);
@@ -1228,7 +1289,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   FPDF_RenderPageBitmap(bmp, page, 0, 0, pxW, pxH, 0,
                         FPDF_ANNOT | FPDF_LCD_TEXT);
 
-  NSSavePanel *sp = [NSSavePanel savePanel];
+  NSSavePanel* sp = [NSSavePanel savePanel];
   [sp setNameFieldStringValue:[NSString stringWithFormat:@"page_%d.png",
                                                          _pageIndex + 1]];
   if ([sp runModal] != NSModalResponseOK) {
@@ -1236,7 +1297,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
     FPDF_ClosePage(page);
     return NO;
   }
-  NSURL *url = sp.URL;
+  NSURL* url = sp.URL;
 
   CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
   CGDataProviderRef dp = CGDataProviderCreateWithData(
@@ -1252,27 +1313,32 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
     CGImageDestinationAddImage(dst, img, NULL);
     CGImageDestinationFinalize(dst);
   }
-  if (dst)
+  if (dst) {
     CFRelease(dst);
-  if (img)
+  }
+  if (img) {
     CGImageRelease(img);
-  if (dp)
+  }
+  if (dp) {
     CGDataProviderRelease(dp);
-  if (cs)
+  }
+  if (cs) {
     CGColorSpaceRelease(cs);
+  }
   FPDFBitmap_Destroy(bmp);
   FPDF_ClosePage(page);
   return YES;
 }
 
 - (IBAction)saveImageAtPoint:(id)sender {
-  if (!_doc)
+  if (!_doc) {
     return;
+  }
   if (!_lastContextHitImage) {
     MacLog_DebugNS(@"[saveImage] blocked: last context not on image");
     return;
   }
-  NSPoint pt = _lastContextPt; // 使用右键弹出时记录的位置
+  NSPoint pt = _lastContextPt;  // 使用右键弹出时记录的位置
   NSPoint pageXY = [self toPagePxFromView:pt];
   double px = pageXY.x, py = pageXY.y;
   double wpt = 0, hpt = 0;
@@ -1281,8 +1347,9 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
         @"pageWH=(%.1f,%.1f)",
         pt.x, pt.y, px, py, wpt, hpt);
   FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
-  if (!page)
+  if (!page) {
     return;
+  }
   // 使用共享的 pdf_utils 模块查找命中图片
   PdfHitImageResult hitResult = PdfHitImageAt(page, px, py, hpt, 2.0f);
   FPDF_PAGEOBJECT hit = hitResult.imageObj;
@@ -1303,7 +1370,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
       stringWithFormat:@"[saveImage] bitmap acquired: %p, needDestroy: %@",
                        useBmp, needDestroy ? @"YES" : @"NO"]);
 
-  void *buf = nullptr;
+  void* buf = nullptr;
   int w = 0, h = 0, stride = 0;
   if (useBmp) {
     buf = FPDFBitmap_GetBuffer(useBmp);
@@ -1317,13 +1384,14 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   if (!buf || w <= 0 || h <= 0) {
     NSLog(@"[PdfWinViewer][saveImage] no bitmap available");
     MacLog_DebugNS(@"[saveImage] bitmap acquisition failed");
-    if (needDestroy && useBmp)
+    if (needDestroy && useBmp) {
       FPDFBitmap_Destroy(useBmp);
+    }
     FPDF_ClosePage(page);
     return;
   }
   // 保存为 PNG（mac 端采用 ImageIO）
-  NSSavePanel *sp = [NSSavePanel savePanel];
+  NSSavePanel* sp = [NSSavePanel savePanel];
   [sp setNameFieldStringValue:@"image.png"];
   NSInteger resp = [sp runModal];
   NSLog(@"[PdfWinViewer][saveImage] save panel resp=%ld", (long)resp);
@@ -1333,7 +1401,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
     FPDF_ClosePage(page);
     return;
   }
-  NSURL *url = sp.URL;
+  NSURL* url = sp.URL;
 
   // 获取 PDFium 位图格式
   int pdfFormat = FPDFBitmap_GetFormat(useBmp);
@@ -1368,16 +1436,16 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 
     // 创建 RGB 缓冲区
     rgbBuffer.resize(w * h * 3);
-    const unsigned char *bgrData = (const unsigned char *)buf;
+    const unsigned char* bgrData = (const unsigned char*)buf;
 
     // BGR -> RGB 转换
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
         int bgrIdx = y * stride + x * 3;
         int rgbIdx = y * w * 3 + x * 3;
-        rgbBuffer[rgbIdx + 0] = bgrData[bgrIdx + 2]; // R = B
-        rgbBuffer[rgbIdx + 1] = bgrData[bgrIdx + 1]; // G = G
-        rgbBuffer[rgbIdx + 2] = bgrData[bgrIdx + 0]; // B = R
+        rgbBuffer[rgbIdx + 0] = bgrData[bgrIdx + 2];  // R = B
+        rgbBuffer[rgbIdx + 1] = bgrData[bgrIdx + 1];  // G = G
+        rgbBuffer[rgbIdx + 2] = bgrData[bgrIdx + 0];  // B = R
       }
     }
 
@@ -1386,7 +1454,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
                                       NULL);
     bitsPerPixel = 24;
     bi = (CGBitmapInfo)kCGBitmapByteOrderDefault;
-    finalStride = w * 3; // RGB stride
+    finalStride = w * 3;  // RGB stride
 
     MacLog_DebugNS([NSString
         stringWithFormat:@"[saveImage] BGR converted to RGB, new stride=%d",
@@ -1425,14 +1493,18 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
     MacLog_DebugNS(@"[saveImage] missing destination or image");
   }
 
-  if (dst)
+  if (dst) {
     CFRelease(dst);
-  if (img)
+  }
+  if (img) {
     CGImageRelease(img);
-  if (dp)
+  }
+  if (dp) {
     CGDataProviderRelease(dp);
-  if (cs)
+  }
+  if (cs) {
     CGColorSpaceRelease(cs);
+  }
 
   // 释放 PDFium 位图
   if (needDestroy && useBmp) {
@@ -1451,15 +1523,17 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 
 // 检测点击位置的PDF对象
 - (void)detectObjectAtPoint:(NSPoint)viewPoint {
-  if (!_doc)
+  if (!_doc) {
     return;
+  }
 
   NSPoint pageXY = [self toPagePxFromView:viewPoint];
   double px = pageXY.x, py = pageXY.y;
 
   FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
-  if (!page)
+  if (!page) {
     return;
+  }
 
   // 遍历页面上的所有对象
   int totalObjs = FPDFPage_CountObjects(page);
@@ -1468,8 +1542,9 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 
   for (int i = 0; i < totalObjs; i++) {
     FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
-    if (!obj)
+    if (!obj) {
       continue;
+    }
 
     // 获取对象边界
     float left, bottom, right, top;
@@ -1485,13 +1560,13 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
         if (self.delegate && [self.delegate respondsToSelector:@selector
                                             (pdfViewDidClickObject:atIndex:)]) {
           // 将FPDF_PAGEOBJECT包装为NSValue传递
-          NSValue *objValue = [NSValue valueWithPointer:obj];
+          NSValue* objValue = [NSValue valueWithPointer:obj];
           [self.delegate performSelector:@selector(pdfViewDidClickObject:
                                                                  atIndex:)
                               withObject:objValue
                               withObject:@(i)];
         }
-        break; // 只处理第一个命中的对象
+        break;  // 只处理第一个命中的对象
       }
     }
   }
@@ -1500,7 +1575,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 }
 
 // 文本查找功能
-- (BOOL)findText:(NSString *)searchText fromIndex:(NSNumber *)startIndex {
+- (BOOL)findText:(NSString*)searchText fromIndex:(NSNumber*)startIndex {
   if (!_doc || !searchText || searchText.length == 0) {
     NSLog(@"[PdfView] 查找失败：无效的文档或搜索文本");
     return NO;
@@ -1521,7 +1596,7 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
   }
 
   // 将NSString转换为FPDF_WIDESTRING
-  NSData *utf16Data =
+  NSData* utf16Data =
       [searchText dataUsingEncoding:NSUTF16LittleEndianStringEncoding];
   FPDF_WIDESTRING wideString = (FPDF_WIDESTRING)utf16Data.bytes;
 
@@ -1578,21 +1653,22 @@ static inline std::string NSStringToUTF8(NSObject *obj) {
 
 // 书签节点模型
 @interface TocNode : NSObject
-@property(nonatomic, strong) NSString *title;
-@property(nonatomic, assign) int pageIndex; // -1 表示无跳转
-@property(nonatomic, strong) NSMutableArray<TocNode *> *children;
+@property(nonatomic, strong) NSString* title;
+@property(nonatomic, assign) int pageIndex;  // -1 表示无跳转
+@property(nonatomic, strong) NSMutableArray<TocNode*>* children;
 @end
 
 @implementation TocNode
 @end
 
-static NSString *BookmarkTitle(FPDF_DOCUMENT doc, FPDF_BOOKMARK bm) {
+static NSString* BookmarkTitle(FPDF_DOCUMENT doc, FPDF_BOOKMARK bm) {
   int len = FPDFBookmark_GetTitle(bm, nullptr, 0);
-  if (len <= 0)
+  if (len <= 0) {
     return @"";
+  }
   std::vector<unsigned short> w((size_t)len + 1, 0);
-  FPDFBookmark_GetTitle(bm, (unsigned short *)w.data(), len);
-  return [[NSString alloc] initWithCharacters:(unichar *)w.data()
+  FPDFBookmark_GetTitle(bm, (unsigned short*)w.data(), len);
+  return [[NSString alloc] initWithCharacters:(unichar*)w.data()
                                        length:(NSUInteger)len];
 }
 
@@ -1600,19 +1676,22 @@ static int BookmarkPage(FPDF_DOCUMENT doc, FPDF_BOOKMARK bm) {
   FPDF_DEST dest = FPDFBookmark_GetDest(doc, bm);
   if (!dest) {
     FPDF_ACTION act = FPDFBookmark_GetAction(bm);
-    if (act)
+    if (act) {
       dest = FPDFAction_GetDest(doc, act);
+    }
   }
-  if (!dest)
+  if (!dest) {
     return -1;
+  }
   return FPDFDest_GetDestPageIndex(doc, dest);
 }
 
-static void BuildBookmarkChildren(FPDF_DOCUMENT doc, FPDF_BOOKMARK parentBm,
-                                  TocNode *parentNode) {
+static void BuildBookmarkChildren(FPDF_DOCUMENT doc,
+                                  FPDF_BOOKMARK parentBm,
+                                  TocNode* parentNode) {
   FPDF_BOOKMARK child = FPDFBookmark_GetFirstChild(doc, parentBm);
   while (child) {
-    TocNode *node = [TocNode new];
+    TocNode* node = [TocNode new];
     node.title = BookmarkTitle(doc, child);
     node.pageIndex = BookmarkPage(doc, child);
     node.children = [NSMutableArray new];
@@ -1623,8 +1702,8 @@ static void BuildBookmarkChildren(FPDF_DOCUMENT doc, FPDF_BOOKMARK parentBm,
   }
 }
 
-static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
-  TocNode *root = [TocNode new];
+static TocNode* BuildBookmarksTree(FPDF_DOCUMENT doc) {
+  TocNode* root = [TocNode new];
   root.title = @"ROOT";
   root.pageIndex = -1;
   root.children = [NSMutableArray new];
@@ -1632,59 +1711,62 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   return root;
 }
 
-@interface AppDelegate
-    : NSObject <NSApplicationDelegate, NSOutlineViewDataSource,
-                NSOutlineViewDelegate, PdfViewDelegate, NSSplitViewDelegate,
-                NSTextViewDelegate, NSWindowDelegate>
-@property(nonatomic, strong) NSWindow *window;
-@property(nonatomic, strong) NSSplitView *split;
-@property(nonatomic, strong) NSOutlineView *outline;
-@property(nonatomic, strong) NSScrollView *outlineScroll;
-@property(nonatomic, strong) PdfView *view;
-@property(nonatomic, strong) TocNode *tocRoot;
-@property(nonatomic, strong) NSMutableArray<NSString *> *recentPaths;
-@property(nonatomic, strong) NSMenu *recentMenu;
-@property(nonatomic, strong) NSMenuItem *recentMenuItem;
+@interface AppDelegate : NSObject <NSApplicationDelegate,
+                                   NSOutlineViewDataSource,
+                                   NSOutlineViewDelegate,
+                                   PdfViewDelegate,
+                                   NSSplitViewDelegate,
+                                   NSTextViewDelegate,
+                                   NSWindowDelegate>
+@property(nonatomic, strong) NSWindow* window;
+@property(nonatomic, strong) NSSplitView* split;
+@property(nonatomic, strong) NSOutlineView* outline;
+@property(nonatomic, strong) NSScrollView* outlineScroll;
+@property(nonatomic, strong) PdfView* view;
+@property(nonatomic, strong) TocNode* tocRoot;
+@property(nonatomic, strong) NSMutableArray<NSString*>* recentPaths;
+@property(nonatomic, strong) NSMenu* recentMenu;
+@property(nonatomic, strong) NSMenuItem* recentMenuItem;
 @property(nonatomic, strong)
-    NSMutableDictionary *settingsDict; // 与 Windows 对齐的 settings.json 容器
+    NSMutableDictionary* settingsDict;  // 与 Windows 对齐的 settings.json 容器
 
 // 底部状态栏相关属性
-@property(nonatomic, strong) NSView *statusBar;
-@property(nonatomic, strong) NSTextField *pageLabel;
-@property(nonatomic, strong) NSTextField *pageInput;
-@property(nonatomic, strong) NSTextField *totalPagesLabel;
-@property(nonatomic, strong) NSButton *prevPageButton;
-@property(nonatomic, strong) NSButton *nextPageButton;
+@property(nonatomic, strong) NSView* statusBar;
+@property(nonatomic, strong) NSTextField* pageLabel;
+@property(nonatomic, strong) NSTextField* pageInput;
+@property(nonatomic, strong) NSTextField* totalPagesLabel;
+@property(nonatomic, strong) NSButton* prevPageButton;
+@property(nonatomic, strong) NSButton* nextPageButton;
 @property(nonatomic, strong)
-    NSView *mainContentView; // 主内容区域（不包括状态栏）
+    NSView* mainContentView;  // 主内容区域（不包括状态栏）
 
 // 书签控制栏相关属性
-@property(nonatomic, strong) NSView *bookmarkControlBar;
-@property(nonatomic, strong) NSButton *bookmarkToggleButton;
-@property(nonatomic, strong) NSView *leftPanel; // 左侧面板（包含控制栏和书签）
-@property(nonatomic, assign) BOOL bookmarkVisible; // 书签是否可见
+@property(nonatomic, strong) NSView* bookmarkControlBar;
+@property(nonatomic, strong) NSButton* bookmarkToggleButton;
+@property(nonatomic, strong) NSView* leftPanel;  // 左侧面板（包含控制栏和书签）
+@property(nonatomic, assign) BOOL bookmarkVisible;  // 书签是否可见
 @property(nonatomic, strong)
-    NSView *expandedTopControlBar; // 展开状态的顶部控制栏
+    NSView* expandedTopControlBar;  // 展开状态的顶部控制栏
 
 // 右侧检查器面板相关属性
 @property(nonatomic, strong)
-    NSView *rightPanel; // 右侧面板（包含PDF内容和检查器）
-@property(nonatomic, strong) NSView *pdfContentView; // PDF内容视图容器
-@property(nonatomic, strong) NSView *inspectorPanel; // 检查器面板
+    NSView* rightPanel;  // 右侧面板（包含PDF内容和检查器）
+@property(nonatomic, strong) NSView* pdfContentView;  // PDF内容视图容器
+@property(nonatomic, strong) NSView* inspectorPanel;  // 检查器面板
 @property(nonatomic, strong)
-    NSButton *inspectorToggleButton;                // 检查器展开/收起按钮
-@property(nonatomic, assign) BOOL inspectorVisible; // 检查器是否可见
-@property(nonatomic, strong) NSTextView *inspectorTextView; // 检查器文本视图
+    NSButton* inspectorToggleButton;  // 检查器展开/收起按钮
+@property(nonatomic, assign) BOOL inspectorVisible;  // 检查器是否可见
+@property(nonatomic, strong) NSTextView* inspectorTextView;  // 检查器文本视图
 @property(nonatomic, strong)
-    NSScrollView *inspectorScrollView; // 检查器滚动视图
+    NSScrollView* inspectorScrollView;  // 检查器滚动视图
 @property(nonatomic, strong)
-    NSMutableDictionary *objectPositions; // 对象号 -> 文本位置映射
+    NSMutableDictionary* objectPositions;  // 对象号 -> 文本位置映射
 
 // 页面查找功能
-@property(nonatomic, strong) NSPanel *findPanel;           // 查找面板
-@property(nonatomic, strong) NSTextField *findTextField;   // 查找输入框
-@property(nonatomic, strong) NSString *lastSearchTerm;     // 上次查找的内容
-@property(nonatomic, assign) NSInteger currentSearchIndex; // 当前查找结果索引
+@property(nonatomic, strong) NSPanel* findPanel;          // 查找面板
+@property(nonatomic, strong) NSTextField* findTextField;  // 查找输入框
+@property(nonatomic, strong) NSString* lastSearchTerm;  // 上次查找的内容
+@property(nonatomic, assign) NSInteger currentSearchIndex;  // 当前查找结果索引
 @end
 
 // 为在主实现中调用分类方法提供前置声明（命名分类，避免"primary
@@ -1694,7 +1776,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 - (void)extractRecentFromSettings;
 - (void)rebuildRecentMenu;
 - (void)persistRecentIntoSettings;
-- (void)openPathAndAdjust:(NSString *)path;
+- (void)openPathAndAdjust:(NSString*)path;
 - (void)createStatusBar;
 - (void)updateStatusBar;
 - (void)onPrevPage:(id)sender;
@@ -1706,11 +1788,11 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 - (void)expandAllBookmarks:(id)sender;
 - (void)collapseAllBookmarks:(id)sender;
 - (void)highlightCurrentBookmark;
-- (TocNode *)findBookmarkForPage:(int)pageIndex inNode:(TocNode *)node;
-- (void)expandParentsOfItem:(TocNode *)item;
-- (BOOL)findParentPathForItem:(TocNode *)targetItem
-                       inNode:(TocNode *)currentNode
-                   parentPath:(NSMutableArray *)path;
+- (TocNode*)findBookmarkForPage:(int)pageIndex inNode:(TocNode*)node;
+- (void)expandParentsOfItem:(TocNode*)item;
+- (BOOL)findParentPathForItem:(TocNode*)targetItem
+                       inNode:(TocNode*)currentNode
+                   parentPath:(NSMutableArray*)path;
 - (void)createExpandedBookmarkControls;
 - (void)removeExpandedBookmarkControls;
 - (void)updateBookmarkScrollView;
@@ -1723,38 +1805,36 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 - (void)toggleInspectorVisibility:(id)sender;
 - (void)setInspectorVisible:(BOOL)visible animated:(BOOL)animated;
 - (void)updateInspectorLayout;
-- (void)displayObjectTreeNode:(PDFIUM_EX_OBJECT_TREE_NODE *)node
-             attributedString:(NSMutableAttributedString *)attributedInfo
-                  normalAttrs:(NSDictionary *)normalAttrs
-                  objNumAttrs:(NSDictionary *)objNumAttrs;
+- (void)displayObjectTreeNode:(PDFIUM_EX_OBJECT_TREE_NODE*)node
+             attributedString:(NSMutableAttributedString*)attributedInfo
+                  normalAttrs:(NSDictionary*)normalAttrs
+                  objNumAttrs:(NSDictionary*)objNumAttrs;
 - (void)updateInspectorContent;
-- (void)handleShowWindowNotification:(NSNotification *)notification;
+- (void)handleShowWindowNotification:(NSNotification*)notification;
 @end
 
 @implementation AppDelegate
-- (void)applicationDidFinishLaunching:(NSNotification *)notification {
-// 启动清空文件日志
-#if PDFWV_ENABLE_LOGGING
-  MacLog_ResetFileOnStartup();
-#endif
+- (void)applicationDidFinishLaunching:(NSNotification*)notification {
+  // 注意：日志清理已移到 main() 函数开头，以保留单例检测日志
   NSRect rect = NSMakeRect(200, 200, 1200, 800);
   self.window = [[NSWindow alloc]
       initWithContentRect:rect
                 styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                           NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable)
+                           NSWindowStyleMaskResizable |
+                           NSWindowStyleMaskMiniaturizable)
                   backing:NSBackingStoreBuffered
                     defer:NO];
-  
+
   // 确保窗口可见
   [self.window setBackgroundColor:[NSColor windowBackgroundColor]];
   [self.window setIsVisible:YES];
   [self.window setAlphaValue:1.0];
-  NSLog(@"[Window] 窗口创建完成，frame: %@, visible: %@", 
-        NSStringFromRect(self.window.frame), 
+  NSLog(@"[Window] 窗口创建完成，frame: %@, visible: %@",
+        NSStringFromRect(self.window.frame),
         self.window.isVisible ? @"YES" : @"NO");
 
   // 创建主容器视图，包含主内容区域和底部状态栏
-  NSView *containerView =
+  NSView* containerView =
       [[NSView alloc] initWithFrame:self.window.contentView.bounds];
   containerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
@@ -1780,11 +1860,11 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   self.split = [[NSSplitView alloc] initWithFrame:self.mainContentView.bounds];
   self.split.dividerStyle = NSSplitViewDividerStyleThin;
   self.split.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-  self.split.delegate = self;   // 设置委托以监听宽度变化
-  [self.split setVertical:YES]; // 左右分栏：左侧书签，右侧内容
+  self.split.delegate = self;    // 设置委托以监听宽度变化
+  [self.split setVertical:YES];  // 左右分栏：左侧书签，右侧内容
 
   // 创建左侧面板（包含顶部控制栏和书签区域）
-  CGFloat initialWidth = kBookmarkExpandedWidth; // 默认展开状态
+  CGFloat initialWidth = kBookmarkExpandedWidth;  // 默认展开状态
   self.leftPanel = [[NSView alloc]
       initWithFrame:NSMakeRect(0, 0, initialWidth,
                                self.mainContentView.bounds.size.height)];
@@ -1812,7 +1892,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   // Outline（书签区域，位于控制栏下方，初始时隐藏）
   // 为滚动条预留空间，outline的宽度应该小于滚动视图的宽度
   CGFloat outlineWidth =
-      kBookmarkExpandedWidth - kScrollBarWidth; // 为滚动条预留空间
+      kBookmarkExpandedWidth - kScrollBarWidth;  // 为滚动条预留空间
   NSRect outlineFrame =
       NSMakeRect(0, 0, outlineWidth,
                  self.leftPanel.bounds.size.height - kControlBarHeight);
@@ -1820,9 +1900,9 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
         kScrollBarWidth);
 
   self.outline = [[NSOutlineView alloc] initWithFrame:outlineFrame];
-  NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"toc"];
+  NSTableColumn* col = [[NSTableColumn alloc] initWithIdentifier:@"toc"];
   col.title = @"书签";
-  col.width = outlineWidth - 20; // 为滚动条和边距预留空间
+  col.width = outlineWidth - 20;  // 为滚动条和边距预留空间
   col.minWidth = 100;
   col.maxWidth = outlineWidth - 10;
   NSLog(@"[ScrollDebug] 表格列宽度: %.1f", col.width);
@@ -1833,8 +1913,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   self.outline.headerView = nil;
   self.outline.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   self.outline.rowSizeStyle = NSTableViewRowSizeStyleDefault;
-  self.outline.allowsEmptySelection = YES;   // 允许空选择
-  self.outline.allowsMultipleSelection = NO; // 禁用多选
+  self.outline.allowsEmptySelection = YES;    // 允许空选择
+  self.outline.allowsMultipleSelection = NO;  // 禁用多选
 
   NSLog(@"[ScrollDebug] ========== 初始化书签滚动视图 ==========");
   NSLog(@"[ScrollDebug] outlineFrame: %@", NSStringFromRect(outlineFrame));
@@ -1853,31 +1933,32 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   // 垂直滚动条配置 - 确保始终可见且功能正常
   self.outlineScroll.hasVerticalScroller = YES;
-  self.outlineScroll.hasHorizontalScroller = NO; // 禁用水平滚动条，避免占用空间
+  self.outlineScroll.hasHorizontalScroller =
+      NO;  // 禁用水平滚动条，避免占用空间
   self.outlineScroll.autohidesScrollers =
-      NO; // 始终显示滚动条，提供更好的用户反馈
+      NO;  // 始终显示滚动条，提供更好的用户反馈
 
   NSLog(@"[ScrollDebug] 基本滚动条配置完成 - hasVertical: YES, hasHorizontal: "
         @"NO, autohides: NO");
 
   // 为了调试，暂时使用传统滚动条样式，更容易看到
   self.outlineScroll.scrollerStyle =
-      NSScrollerStyleLegacy; // 传统滚动条，更明显可见
+      NSScrollerStyleLegacy;  // 传统滚动条，更明显可见
   NSLog(@"[ScrollDebug] 使用传统滚动条样式: NSScrollerStyleLegacy (调试模式)");
 
   // 滚动行为优化
   self.outlineScroll.verticalScrollElasticity =
-      NSScrollElasticityAllowed; // 允许弹性滚动
+      NSScrollElasticityAllowed;  // 允许弹性滚动
   self.outlineScroll.horizontalScrollElasticity =
-      NSScrollElasticityNone;                 // 禁用水平弹性滚动
-  self.outlineScroll.borderType = NSNoBorder; // 无边框，更简洁
+      NSScrollElasticityNone;                  // 禁用水平弹性滚动
+  self.outlineScroll.borderType = NSNoBorder;  // 无边框，更简洁
   self.outlineScroll.autoresizingMask =
       NSViewWidthSizable | NSViewHeightSizable;
 
   NSLog(@"[ScrollDebug] 滚动行为配置完成");
 
   // 检查初始滚动条状态
-  NSScroller *initialVScroller = self.outlineScroll.verticalScroller;
+  NSScroller* initialVScroller = self.outlineScroll.verticalScroller;
   if (initialVScroller) {
     NSLog(@"[ScrollDebug] ✅ 初始垂直滚动条已创建");
     NSLog(@"[ScrollDebug] 初始滚动条 frame: %@",
@@ -1897,7 +1978,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   // 确保滚动视图内容正确更新
   [self.outlineScroll setNeedsDisplay:YES];
 
-  self.outlineScroll.hidden = NO; // 默认显示
+  self.outlineScroll.hidden = NO;  // 默认显示
   NSLog(@"[ScrollDebug] 滚动视图设置为显示状态");
 
   [self.leftPanel addSubview:self.outlineScroll];
@@ -1909,7 +1990,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   NSLog(@"[ScrollDebug] leftPanel subviews count: %lu",
         (unsigned long)self.leftPanel.subviews.count);
   for (NSUInteger i = 0; i < self.leftPanel.subviews.count; i++) {
-    NSView *subview = self.leftPanel.subviews[i];
+    NSView* subview = self.leftPanel.subviews[i];
     NSLog(@"[ScrollDebug] leftPanel subview[%lu]: %@ frame: %@",
           (unsigned long)i, NSStringFromClass([subview class]),
           NSStringFromRect(subview.frame));
@@ -1921,26 +2002,26 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [self createInspectorPanel];
 
   // 在右侧面板内创建PDF内容视图和检查器的分割视图
-  NSSplitView *rightSplit =
+  NSSplitView* rightSplit =
       [[NSSplitView alloc] initWithFrame:self.rightPanel.bounds];
   rightSplit.dividerStyle = NSSplitViewDividerStyleThin;
   rightSplit.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-  rightSplit.delegate = self; // 设置委托以控制最小宽度
-  [rightSplit setVertical:YES]; // 左右分栏：左侧PDF内容，右侧检查器
+  rightSplit.delegate = self;  // 设置委托以控制最小宽度
+  [rightSplit setVertical:YES];  // 左右分栏：左侧PDF内容，右侧检查器
 
   // 创建PDF内容视图容器
-  CGFloat pdfContentWidth =
-      self.rightPanel.bounds.size.width -
-      (self.inspectorVisible ? kInspectorWidth : 0);
+  CGFloat pdfContentWidth = self.rightPanel.bounds.size.width -
+                            (self.inspectorVisible ? kInspectorWidth : 0);
   self.pdfContentView = [[NSView alloc]
       initWithFrame:NSMakeRect(0, 0, pdfContentWidth,
                                self.rightPanel.bounds.size.height)];
-  self.pdfContentView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  self.pdfContentView.autoresizingMask =
+      NSViewWidthSizable | NSViewHeightSizable;
 
   // 创建PDF视图
   self.view = [[PdfView alloc] initWithFrame:NSMakeRect(0, 0, 800, 600)];
   self.view.delegate = self;
-  NSScrollView *scroll =
+  NSScrollView* scroll =
       [[NSScrollView alloc] initWithFrame:self.pdfContentView.bounds];
   scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   scroll.hasVerticalScroller = YES;
@@ -1952,43 +2033,49 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   // 将PDF内容视图和检查器面板添加到右侧分割视图
   [rightSplit addSubview:self.pdfContentView];
   [rightSplit addSubview:self.inspectorPanel];
-  
+
   // 保存 rightSplit 的引用（用于 delegate 方法中识别）
-  // 注意：由于 rightSplit 是局部变量，我们通过判断 splitView 是否在 rightPanel 的子视图中来识别
+  // 注意：由于 rightSplit 是局部变量，我们通过判断 splitView 是否在 rightPanel
+  // 的子视图中来识别
 
   // 设置初始分割位置（检查器默认收起，完全隐藏）
-  [rightSplit setPosition:self.rightPanel.bounds.size.width
-         ofDividerAtIndex:0];
-  
+  [rightSplit setPosition:self.rightPanel.bounds.size.width ofDividerAtIndex:0];
+
   // 初始状态下隐藏检查器面板（即使有宽度也不显示）
   self.inspectorPanel.hidden = YES;
 
   [self.rightPanel addSubview:rightSplit];
-  
+
   // 添加悬浮的检查器展开/收起按钮到右侧面板（在滚动条上方，独立悬浮）
-  CGFloat buttonWidth = kBookmarkCollapsedWidth * 1.5; // 调大50%
-  CGFloat buttonHeight = kControlBarHeight * 1.5; // 调大50%
+  CGFloat buttonWidth = kBookmarkCollapsedWidth * 1.5;  // 调大50%
+  CGFloat buttonHeight = kControlBarHeight * 1.5;       // 调大50%
   CGFloat buttonY = (self.rightPanel.bounds.size.height - buttonHeight) / 2;
   // 滚动条宽度约为15-20px，按钮距离右边缘需要避开滚动条
-  CGFloat scrollBarWidth = 15.0; // 滚动条宽度
-  CGFloat buttonX = self.rightPanel.bounds.size.width - buttonWidth - scrollBarWidth; // 距离滚动条2像素
+  CGFloat scrollBarWidth = 15.0;  // 滚动条宽度
+  CGFloat buttonX = self.rightPanel.bounds.size.width - buttonWidth -
+                    scrollBarWidth;  // 距离滚动条2像素
   self.inspectorToggleButton = [[NSButton alloc]
       initWithFrame:NSMakeRect(buttonX, buttonY, buttonWidth, buttonHeight)];
   self.inspectorToggleButton.title = @"◀";
-  self.inspectorToggleButton.font = [NSFont systemFontOfSize:21]; // 字体也调大50%（14 * 1.5）
-  self.inspectorToggleButton.bordered = NO; // 无边框，悬浮效果
-  self.inspectorToggleButton.bezelStyle = NSBezelStyleTexturedSquare; // 使用最简单的样式
+  self.inspectorToggleButton.font =
+      [NSFont systemFontOfSize:21];          // 字体也调大50%（14 * 1.5）
+  self.inspectorToggleButton.bordered = NO;  // 无边框，悬浮效果
+  self.inspectorToggleButton.bezelStyle =
+      NSBezelStyleTexturedSquare;  // 使用最简单的样式
   // 设置按钮样式为悬浮效果
   self.inspectorToggleButton.wantsLayer = YES;
-  self.inspectorToggleButton.layer.backgroundColor = [[NSColor clearColor] CGColor];
+  self.inspectorToggleButton.layer.backgroundColor =
+      [[NSColor clearColor] CGColor];
   self.inspectorToggleButton.layer.cornerRadius = 4.0;
-  self.inspectorToggleButton.layer.borderWidth = 0.0; // 移除边框
-  self.inspectorToggleButton.layer.borderColor = [[NSColor clearColor] CGColor]; // 边框颜色设为透明
+  self.inspectorToggleButton.layer.borderWidth = 0.0;  // 移除边框
+  self.inspectorToggleButton.layer.borderColor =
+      [[NSColor clearColor] CGColor];  // 边框颜色设为透明
   self.inspectorToggleButton.layer.shadowOpacity = 0.0;
   self.inspectorToggleButton.layer.shadowRadius = 0.0;
   self.inspectorToggleButton.layer.shadowOffset = NSZeroSize;
   // 设置按钮的 cell 背景为透明
-  if ([self.inspectorToggleButton.cell respondsToSelector:@selector(setBackgroundColor:)]) {
+  if ([self.inspectorToggleButton.cell
+          respondsToSelector:@selector(setBackgroundColor:)]) {
     [self.inspectorToggleButton.cell setBackgroundColor:[NSColor clearColor]];
   }
   self.inspectorToggleButton.target = self;
@@ -1996,11 +2083,13 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   self.inspectorToggleButton.autoresizingMask =
       NSViewMinXMargin | NSViewMaxYMargin | NSViewMinYMargin;
   // 将按钮添加到 rightPanel，并确保它在 rightSplit 上方（不被遮挡）
-  [self.rightPanel addSubview:self.inspectorToggleButton positioned:NSWindowAbove relativeTo:rightSplit];
+  [self.rightPanel addSubview:self.inspectorToggleButton
+                   positioned:NSWindowAbove
+                   relativeTo:rightSplit];
 
   [self.split addSubview:self.leftPanel];
   [self.split addSubview:self.rightPanel];
-  [self.split setPosition:initialWidth ofDividerAtIndex:0]; // 默认显示展开宽度
+  [self.split setPosition:initialWidth ofDividerAtIndex:0];  // 默认显示展开宽度
   [self.mainContentView addSubview:self.split];
 
   // 设置容器视图为窗口的内容视图
@@ -2009,26 +2098,26 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
         NSStringFromRect(containerView.frame));
   NSLog(@"[StatusBar] 窗口contentView: %@", self.window.contentView);
   [self.window setTitle:@"PdfWinViewer (macOS)"];
-  
+
   // 确保窗口可见并显示在前台
   [self.window setReleasedWhenClosed:NO];
   [self.window center];
   [NSApp activateIgnoringOtherApps:YES];
   [self.window makeKeyAndOrderFront:nil];
   [self.window orderFrontRegardless];
-  
+
   NSLog(@"[Window] 窗口已显示，frame: %@", NSStringFromRect(self.window.frame));
 
   // 设置窗口关闭时退出应用
   self.window.delegate = self;
 
   // 构建主菜单（应用/文件/编辑/视图）并设置为主菜单
-  NSMenu *mainMenu = [NSMenu new];
+  NSMenu* mainMenu = [NSMenu new];
   // App 菜单
-  NSMenuItem *appItem = [[NSMenuItem alloc] initWithTitle:@"App"
+  NSMenuItem* appItem = [[NSMenuItem alloc] initWithTitle:@"App"
                                                    action:nil
                                             keyEquivalent:@""];
-  NSMenu *appMenu = [NSMenu new];
+  NSMenu* appMenu = [NSMenu new];
   [appMenu addItemWithTitle:@"关于 PdfWinViewer" action:nil keyEquivalent:@""];
   [appMenu addItem:[NSMenuItem separatorItem]];
   [appMenu addItemWithTitle:@"退出"
@@ -2038,19 +2127,19 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [mainMenu addItem:appItem];
 
   // 文件菜单
-  NSMenuItem *fileItem = [[NSMenuItem alloc] initWithTitle:@"文件"
+  NSMenuItem* fileItem = [[NSMenuItem alloc] initWithTitle:@"文件"
                                                     action:nil
                                              keyEquivalent:@""];
-  NSMenu *fileMenu = [NSMenu new];
-  NSMenuItem *openItem = [fileMenu addItemWithTitle:@"打开…"
+  NSMenu* fileMenu = [NSMenu new];
+  NSMenuItem* openItem = [fileMenu addItemWithTitle:@"打开…"
                                              action:@selector(openDocument:)
                                       keyEquivalent:@"o"];
   openItem.target = self;
-  NSMenuItem *exportItem = [fileMenu addItemWithTitle:@"导出当前页为 PNG"
+  NSMenuItem* exportItem = [fileMenu addItemWithTitle:@"导出当前页为 PNG"
                                                action:@selector(exportPNG:)
                                         keyEquivalent:@"e"];
   exportItem.target = self;
-  exportItem.tag = 9901; // 用于后续查找
+  exportItem.tag = 9901;  // 用于后续查找
   [exportItem setEnabled:NO];
   [fileMenu addItem:[NSMenuItem separatorItem]];
   // 最近浏览子菜单
@@ -2065,7 +2154,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
       self.recentMenuItem, self.recentMenu);
   // 调试：枚举文件菜单条目
   for (NSInteger i = 0; i < fileMenu.numberOfItems; ++i) {
-    NSMenuItem *mi = [fileMenu itemAtIndex:i];
+    NSMenuItem* mi = [fileMenu itemAtIndex:i];
     NSLog(@"[PdfWinViewer] File menu item[%ld]: title='%@' hasSubmenu=%@ "
           @"action=%@",
           (long)i, mi.title, (mi.submenu ? @"YES" : @"NO"),
@@ -2075,10 +2164,10 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [mainMenu addItem:fileItem];
 
   // 编辑菜单
-  NSMenuItem *editItem = [[NSMenuItem alloc] initWithTitle:@"编辑"
+  NSMenuItem* editItem = [[NSMenuItem alloc] initWithTitle:@"编辑"
                                                     action:nil
                                              keyEquivalent:@""];
-  NSMenu *editMenu = [NSMenu new];
+  NSMenu* editMenu = [NSMenu new];
   [editMenu addItemWithTitle:@"复制"
                       action:@selector(copy:)
                keyEquivalent:@"c"];
@@ -2086,46 +2175,46 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [mainMenu addItem:editItem];
 
   // 视图/导航菜单
-  NSMenuItem *viewItem = [[NSMenuItem alloc] initWithTitle:@"视图"
+  NSMenuItem* viewItem = [[NSMenuItem alloc] initWithTitle:@"视图"
                                                     action:nil
                                              keyEquivalent:@""];
-  NSMenu *viewMenu = [NSMenu new];
-  NSMenuItem *zoomInItem = [viewMenu addItemWithTitle:@"放大"
+  NSMenu* viewMenu = [NSMenu new];
+  NSMenuItem* zoomInItem = [viewMenu addItemWithTitle:@"放大"
                                                action:@selector(zoomIn:)
                                         keyEquivalent:@"="];
   zoomInItem.target = self.view;
-  NSMenuItem *zoomOutItem = [viewMenu addItemWithTitle:@"缩小"
+  NSMenuItem* zoomOutItem = [viewMenu addItemWithTitle:@"缩小"
                                                 action:@selector(zoomOut:)
                                          keyEquivalent:@"-"];
   zoomOutItem.target = self.view;
-  NSMenuItem *zoomActualItem = [viewMenu addItemWithTitle:@"实际大小"
+  NSMenuItem* zoomActualItem = [viewMenu addItemWithTitle:@"实际大小"
                                                    action:@selector(zoomActual:)
                                             keyEquivalent:@"0"];
   zoomActualItem.target = self.view;
   [viewMenu addItem:[NSMenuItem separatorItem]];
-  NSMenuItem *homeItem = [viewMenu addItemWithTitle:@"第一页"
+  NSMenuItem* homeItem = [viewMenu addItemWithTitle:@"第一页"
                                              action:@selector(goHome:)
                                       keyEquivalent:@""];
   homeItem.target = self.view;
-  NSMenuItem *endItem = [viewMenu addItemWithTitle:@"最后一页"
+  NSMenuItem* endItem = [viewMenu addItemWithTitle:@"最后一页"
                                             action:@selector(goEnd:)
                                      keyEquivalent:@""];
   endItem.target = self.view;
-  NSMenuItem *prevItem = [viewMenu addItemWithTitle:@"上一页"
+  NSMenuItem* prevItem = [viewMenu addItemWithTitle:@"上一页"
                                              action:@selector(goPrevPage:)
                                       keyEquivalent:@"["];
   prevItem.target = self.view;
-  NSMenuItem *nextItem = [viewMenu addItemWithTitle:@"下一页"
+  NSMenuItem* nextItem = [viewMenu addItemWithTitle:@"下一页"
                                              action:@selector(goNextPage:)
                                       keyEquivalent:@"]"];
   nextItem.target = self.view;
-  NSMenuItem *gotoItem = [viewMenu addItemWithTitle:@"跳转页…"
+  NSMenuItem* gotoItem = [viewMenu addItemWithTitle:@"跳转页…"
                                              action:@selector(gotoPage:)
                                       keyEquivalent:@"g"];
   gotoItem.target = self.view;
   [viewMenu addItem:[NSMenuItem separatorItem]];
   // 日志窗口入口
-  NSMenuItem *logItem = [viewMenu addItemWithTitle:@"日志"
+  NSMenuItem* logItem = [viewMenu addItemWithTitle:@"日志"
                                             action:@selector(openLogWindow:)
                                      keyEquivalent:@"l"];
   logItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
@@ -2151,9 +2240,10 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
         (unsigned long)self.recentPaths.count);
   [self rebuildRecentMenu];
   // 初始时禁用"导出"
-  NSMenuItem *exp = [fileMenu itemWithTag:9901];
-  if (exp)
+  NSMenuItem* exp = [fileMenu itemWithTag:9901];
+  if (exp) {
     [exp setEnabled:NO];
+  }
 
   // 由于默认展开书签，需要确保布局正确
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -2167,8 +2257,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   // 添加全局键盘事件监听，确保PageUp/PageDown总是控制PDF翻页，并支持cmd+f查找
   [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
-                                        handler:^NSEvent *_Nullable(
-                                            NSEvent *_Nonnull event) {
+                                        handler:^NSEvent* _Nullable(
+                                            NSEvent* _Nonnull event) {
                                           return
                                               [self handleGlobalKeyDown:event];
                                         }];
@@ -2176,15 +2266,15 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:
-    (NSApplication *)sender {
+    (NSApplication*)sender {
   FPDF_DestroyLibrary();
   return NSTerminateNow;
 }
 
 #pragma mark - Global Keyboard Event Handling
 
-- (NSEvent *)handleGlobalKeyDown:(NSEvent *)event {
-  NSString *chars = [event charactersIgnoringModifiers];
+- (NSEvent*)handleGlobalKeyDown:(NSEvent*)event {
+  NSString* chars = [event charactersIgnoringModifiers];
   unichar c = chars.length ? [chars characterAtIndex:0] : 0;
   NSEventModifierFlags mods =
       event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
@@ -2193,7 +2283,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   if (c == 'f' && (mods & NSEventModifierFlagCommand)) {
     NSLog(@"[GlobalKey] 拦截到Cmd+F，显示查找面板");
     [self showFindPanel];
-    return nil; // 消费事件
+    return nil;  // 消费事件
   }
 
   // 拦截翻页相关的键盘事件，总是路由到PDF视图
@@ -2221,11 +2311,11 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     // 直接调用PDF视图的键盘处理
     if (self.view && [self.view respondsToSelector:@selector(keyDown:)]) {
       [self.view keyDown:event];
-      return nil; // 消费事件，不再传递
+      return nil;  // 消费事件，不再传递
     }
   }
 
-  return event; // 其他键盘事件正常传递
+  return event;  // 其他键盘事件正常传递
 }
 
 #pragma mark - Find Panel Implementation
@@ -2253,11 +2343,11 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
     // 创建查找按钮
     NSRect findButtonFrame = NSMakeRect(230, 30, 50, 25);
-    NSButton *findButton = [[NSButton alloc] initWithFrame:findButtonFrame];
+    NSButton* findButton = [[NSButton alloc] initWithFrame:findButtonFrame];
     findButton.title = @"查找";
     findButton.target = self;
     findButton.action = @selector(performFind:);
-    findButton.keyEquivalent = @"\r"; // Enter键
+    findButton.keyEquivalent = @"\r";  // Enter键
 
     [self.findPanel.contentView addSubview:self.findTextField];
     [self.findPanel.contentView addSubview:findButton];
@@ -2271,13 +2361,14 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
 // 执行查找
 - (void)performFind:(id)sender {
-  NSString *searchTerm = self.findTextField.stringValue;
-  if (!searchTerm || searchTerm.length == 0)
+  NSString* searchTerm = self.findTextField.stringValue;
+  if (!searchTerm || searchTerm.length == 0) {
     return;
+  }
 
   // 检查检查器是否可见和可用
   if (!self.inspectorVisible || !self.inspectorTextView) {
-    NSAlert *alert = [[NSAlert alloc] init];
+    NSAlert* alert = [[NSAlert alloc] init];
     alert.messageText = @"查找提示";
     alert.informativeText = @"请先打开检查器窗口（右侧面板）";
     [alert addButtonWithTitle:@"确定"];
@@ -2285,9 +2376,9 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     return;
   }
 
-  NSString *inspectorText = self.inspectorTextView.string;
+  NSString* inspectorText = self.inspectorTextView.string;
   if (!inspectorText || inspectorText.length == 0) {
-    NSAlert *alert = [[NSAlert alloc] init];
+    NSAlert* alert = [[NSAlert alloc] init];
     alert.messageText = @"查找提示";
     alert.informativeText = @"检查器窗口中没有内容可搜索";
     [alert addButtonWithTitle:@"确定"];
@@ -2352,8 +2443,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 // 显示未找到文本的提示
-- (void)showNotFoundAlert:(NSString *)searchTerm {
-  NSAlert *alert = [[NSAlert alloc] init];
+- (void)showNotFoundAlert:(NSString*)searchTerm {
+  NSAlert* alert = [[NSAlert alloc] init];
   alert.messageText = @"查找结果";
   alert.informativeText =
       [NSString stringWithFormat:@"在检查器窗口中未找到文本: %@", searchTerm];
@@ -2363,23 +2454,23 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 // 为对象引用着色的辅助方法
-- (NSMutableAttributedString *)colorizeObjectReferences:(NSString *)text
-                                            normalAttrs:
-                                                (NSDictionary *)normalAttrs {
-  NSMutableAttributedString *result =
+- (NSMutableAttributedString*)colorizeObjectReferences:(NSString*)text
+                                           normalAttrs:
+                                               (NSDictionary*)normalAttrs {
+  NSMutableAttributedString* result =
       [[NSMutableAttributedString alloc] initWithString:text
                                              attributes:normalAttrs];
 
   // 创建绿色属性
-  NSDictionary *greenAttrs = @{
+  NSDictionary* greenAttrs = @{
     NSForegroundColorAttributeName : [NSColor systemGreenColor],
     NSFontAttributeName : [NSFont monospacedSystemFontOfSize:12
                                                       weight:NSFontWeightBold]
   };
 
   // 查找所有对象引用（格式：数字 0 R）
-  NSError *error = nil;
-  NSRegularExpression *regex = [NSRegularExpression
+  NSError* error = nil;
+  NSRegularExpression* regex = [NSRegularExpression
       regularExpressionWithPattern:@"\\b(\\d+)\\s+0\\s+R\\b"
                            options:0
                              error:&error];
@@ -2393,8 +2484,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [regex enumerateMatchesInString:text
                           options:0
                             range:NSMakeRange(0, text.length)
-                       usingBlock:^(NSTextCheckingResult *match,
-                                    NSMatchingFlags flags, BOOL *stop) {
+                       usingBlock:^(NSTextCheckingResult* match,
+                                    NSMatchingFlags flags, BOOL* stop) {
                          NSRange matchRange = [match range];
                          [result setAttributes:greenAttrs range:matchRange];
                        }];
@@ -2403,7 +2494,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 // PDF视图对象点击处理
-- (void)pdfViewDidClickObject:(NSValue *)objectValue atIndex:(NSNumber *)index {
+- (void)pdfViewDidClickObject:(NSValue*)objectValue atIndex:(NSNumber*)index {
   NSLog(@"[Inspector] PDF视图点击了对象，索引: %@", index);
 
   // 从NSValue中提取FPDF_PAGEOBJECT
@@ -2478,7 +2569,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     [self.outlineScroll reflectScrolledClipView:self.outlineScroll.contentView];
 
     // 打印内容视图信息
-    NSView *contentView = self.outlineScroll.contentView;
+    NSView* contentView = self.outlineScroll.contentView;
     NSLog(@"[ScrollDebug] contentView frame: %@",
           NSStringFromRect(contentView.frame));
     NSLog(@"[ScrollDebug] contentView bounds: %@",
@@ -2503,7 +2594,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
     // 确保滚动条可见性正确
     if (self.outlineScroll.hasVerticalScroller) {
-      NSScroller *vScroller = self.outlineScroll.verticalScroller;
+      NSScroller* vScroller = self.outlineScroll.verticalScroller;
       if (vScroller) {
         NSLog(@"[ScrollDebug] verticalScroller 存在");
         NSLog(@"[ScrollDebug] verticalScroller frame: %@",
@@ -2592,7 +2683,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     NSLog(@"[ScrollDebug] 设置 hasVerticalScroller = YES, autohidesScrollers = "
           @"NO");
 
-    NSScroller *vScroller = self.outlineScroll.verticalScroller;
+    NSScroller* vScroller = self.outlineScroll.verticalScroller;
     if (vScroller) {
       NSLog(@"[ScrollDebug] 找到 verticalScroller，开始配置");
       NSLog(@"[ScrollDebug] 配置前 - hidden: %@, enabled: %@",
@@ -2641,7 +2732,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
     // 即使内容较少，也确保滚动条存在（可能处于禁用状态）
     self.outlineScroll.hasVerticalScroller = YES;
-    NSScroller *vScroller = self.outlineScroll.verticalScroller;
+    NSScroller* vScroller = self.outlineScroll.verticalScroller;
     if (vScroller) {
       NSLog(@"[ScrollDebug] 滚动条存在，frame: %@",
             NSStringFromRect(vScroller.frame));
@@ -2671,7 +2762,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   NSLog(@"[ScrollDebug] 设置为传统滚动条样式");
 
-  NSScroller *vScroller = self.outlineScroll.verticalScroller;
+  NSScroller* vScroller = self.outlineScroll.verticalScroller;
   if (vScroller) {
     vScroller.scrollerStyle = NSScrollerStyleLegacy;
     vScroller.controlSize = NSControlSizeRegular;
@@ -2701,7 +2792,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     return;
   }
 
-  NSScroller *vScroller = self.outlineScroll.verticalScroller;
+  NSScroller* vScroller = self.outlineScroll.verticalScroller;
   if (!vScroller) {
     NSLog(@"[ScrollDebug] ❌ 垂直滚动条不存在");
     return;
@@ -2728,7 +2819,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   // 检查左侧面板的所有子视图
   NSLog(@"[ScrollDebug] 左侧面板子视图:");
   for (NSUInteger i = 0; i < self.leftPanel.subviews.count; i++) {
-    NSView *subview = self.leftPanel.subviews[i];
+    NSView* subview = self.leftPanel.subviews[i];
     NSRect subviewFrame = subview.frame;
     NSRect scrollerFrame = vScroller.frame;
 
@@ -2805,7 +2896,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   // 计算正确的控制栏位置和大小
   CGFloat expandedWidth =
-      self.leftPanel.bounds.size.width; // 使用实际面板宽度而不是常量
+      self.leftPanel.bounds.size.width;  // 使用实际面板宽度而不是常量
   CGFloat controlBarY = self.leftPanel.bounds.size.height - kControlBarHeight;
   NSRect correctFrame =
       NSMakeRect(0, controlBarY, expandedWidth, kControlBarHeight);
@@ -2821,15 +2912,15 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   self.expandedTopControlBar.frame = correctFrame;
 
   // 更新子视图的位置和大小
-  for (NSView *subview in self.expandedTopControlBar.subviews) {
-    if (subview.frame.size.height == 1) { // 分隔线
+  for (NSView* subview in self.expandedTopControlBar.subviews) {
+    if (subview.frame.size.height == 1) {  // 分隔线
       NSRect separatorFrame = subview.frame;
       separatorFrame.size.width = expandedWidth;
       subview.frame = separatorFrame;
       NSLog(@"[ScrollDebug] 分隔线宽度已更新: %.1f", expandedWidth);
     } else if ([subview isKindOfClass:[NSButton class]]) {
-      NSButton *button = (NSButton *)subview;
-      if ([button.title isEqualToString:@"◀"]) { // 收起按钮
+      NSButton* button = (NSButton*)subview;
+      if ([button.title isEqualToString:@"◀"]) {  // 收起按钮
         // 重新计算按钮位置（右对齐）
         CGFloat buttonWidth = 16;
         CGFloat buttonHeight = 16;
@@ -2852,14 +2943,14 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
 #pragma mark - NSSplitViewDelegate
 
-- (void)splitViewDidResizeSubviews:(NSNotification *)notification {
-  NSSplitView *splitView = (NSSplitView *)notification.object;
-  
+- (void)splitViewDidResizeSubviews:(NSNotification*)notification {
+  NSSplitView* splitView = (NSSplitView*)notification.object;
+
   // 只处理左侧书签面板的 splitView，不处理右侧检查器的 splitView
   if (splitView != self.split) {
     return;
   }
-  
+
   NSLog(@"[ScrollDebug] ========== 分割视图尺寸改变 ==========");
   NSLog(@"[ScrollDebug] 左侧面板新尺寸: %@",
         NSStringFromRect(self.leftPanel.frame));
@@ -2879,7 +2970,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   NSLog(@"[ScrollDebug] ========== 分割视图尺寸改变处理完成 ==========");
 }
 
-- (CGFloat)splitView:(NSSplitView *)splitView
+- (CGFloat)splitView:(NSSplitView*)splitView
     constrainMinCoordinate:(CGFloat)proposedMin
                ofSubviewAt:(NSInteger)dividerIndex {
   // 判断是左侧书签面板的 splitView 还是右侧检查器面板的 splitView
@@ -2903,13 +2994,13 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   return proposedMin;
 }
 
-- (CGFloat)splitView:(NSSplitView *)splitView
+- (CGFloat)splitView:(NSSplitView*)splitView
     constrainMaxCoordinate:(CGFloat)proposedMax
                ofSubviewAt:(NSInteger)dividerIndex {
   if (splitView == self.split) {
     if (dividerIndex == 0) {
       // 左侧面板最大宽度
-      return kBookmarkExpandedWidth + 50; // 允许稍微超过标准宽度
+      return kBookmarkExpandedWidth + 50;  // 允许稍微超过标准宽度
     }
   } else if (splitView.superview == self.rightPanel) {
     // 右侧检查器面板的 splitView
@@ -2921,9 +3012,11 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   return proposedMax;
 }
 
-- (BOOL)splitView:(NSSplitView *)splitView shouldAdjustSizeOfSubview:(NSView *)subview {
+- (BOOL)splitView:(NSSplitView*)splitView
+    shouldAdjustSizeOfSubview:(NSView*)subview {
   // 如果是右侧检查器的 splitView，且检查器处于隐藏状态，不允许自动调整
-  if (splitView.superview == self.rightPanel && subview == self.inspectorPanel && !self.inspectorVisible) {
+  if (splitView.superview == self.rightPanel &&
+      subview == self.inspectorPanel && !self.inspectorVisible) {
     return NO;
   }
   // 对于其他情况，允许自动调整
@@ -2931,33 +3024,33 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 // DataSource
-- (NSInteger)outlineView:(NSOutlineView *)outlineView
+- (NSInteger)outlineView:(NSOutlineView*)outlineView
     numberOfChildrenOfItem:(id)item {
-  TocNode *n = item ?: self.tocRoot;
+  TocNode* n = item ?: self.tocRoot;
   return n ? (NSInteger)n.children.count : 0;
 }
-- (id)outlineView:(NSOutlineView *)outlineView
+- (id)outlineView:(NSOutlineView*)outlineView
             child:(NSInteger)index
            ofItem:(id)item {
-  TocNode *n = item ?: self.tocRoot;
+  TocNode* n = item ?: self.tocRoot;
   return (index >= 0 && index < (NSInteger)n.children.count)
              ? n.children[(NSUInteger)index]
              : nil;
 }
-- (BOOL)outlineView:(NSOutlineView *)outlineView isItemExpandable:(id)item {
-  TocNode *n = (TocNode *)item;
+- (BOOL)outlineView:(NSOutlineView*)outlineView isItemExpandable:(id)item {
+  TocNode* n = (TocNode*)item;
   return n.children.count > 0;
 }
-- (NSView *)outlineView:(NSOutlineView *)outlineView
-     viewForTableColumn:(NSTableColumn *)tableColumn
-                   item:(id)item {
-  NSTableCellView *cell = [outlineView makeViewWithIdentifier:@"tocCell"
+- (NSView*)outlineView:(NSOutlineView*)outlineView
+    viewForTableColumn:(NSTableColumn*)tableColumn
+                  item:(id)item {
+  NSTableCellView* cell = [outlineView makeViewWithIdentifier:@"tocCell"
                                                         owner:self];
   if (!cell) {
     cell = [[NSTableCellView alloc]
         initWithFrame:NSMakeRect(0, 0, tableColumn.width, 20)];
     cell.identifier = @"tocCell";
-    NSTextField *text = [[NSTextField alloc] initWithFrame:cell.bounds];
+    NSTextField* text = [[NSTextField alloc] initWithFrame:cell.bounds];
     text.bezeled = NO;
     text.drawsBackground = NO;
     text.editable = NO;
@@ -2966,51 +3059,53 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     cell.textField = text;
     [cell addSubview:text];
   }
-  TocNode *n = (TocNode *)item;
+  TocNode* n = (TocNode*)item;
   cell.textField.stringValue = n.title ?: @"";
   return cell;
 }
 
 // Delegate: 双击跳页
-- (void)outlineView:(NSOutlineView *)outlineView
-    didClickTableColumn:(NSTableColumn *)tableColumn {
+- (void)outlineView:(NSOutlineView*)outlineView
+    didClickTableColumn:(NSTableColumn*)tableColumn {
 }
-- (void)outlineViewSelectionDidChange:(NSNotification *)notification {
+- (void)outlineViewSelectionDidChange:(NSNotification*)notification {
   NSInteger row = self.outline.selectedRow;
-  if (row < 0)
+  if (row < 0) {
     return;
+  }
   id item = [self.outline itemAtRow:row];
-  TocNode *n = (TocNode *)item;
+  TocNode* n = (TocNode*)item;
   if (n.pageIndex >= 0) {
     [self.view goToPage:n.pageIndex];
   }
 }
 
 // NSTextView点击处理
-- (BOOL)textView:(NSTextView *)textView
+- (BOOL)textView:(NSTextView*)textView
     clickedOnLink:(id)link
           atIndex:(NSUInteger)charIndex {
-  return NO; // 我们不使用链接，而是自定义处理
+  return NO;  // 我们不使用链接，而是自定义处理
 }
 
 // 检查器文本视图点击处理
-- (void)inspectorTextViewClicked:(NSClickGestureRecognizer *)recognizer {
-  if (!self.inspectorTextView || !self.objectPositions)
+- (void)inspectorTextViewClicked:(NSClickGestureRecognizer*)recognizer {
+  if (!self.inspectorTextView || !self.objectPositions) {
     return;
+  }
 
   NSPoint clickPoint = [recognizer locationInView:self.inspectorTextView];
 
   // 获取点击位置的字符索引
   NSUInteger charIndex =
       [self.inspectorTextView characterIndexForInsertionAtPoint:clickPoint];
-  NSString *text = self.inspectorTextView.string;
+  NSString* text = self.inspectorTextView.string;
 
   NSLog(@"[Inspector] 点击位置: (%.1f, %.1f), 字符索引: %lu", clickPoint.x,
         clickPoint.y, charIndex);
 
   // 查找点击位置附近的对象引用（格式：数字 0 R）
-  NSError *error = nil;
-  NSRegularExpression *regex =
+  NSError* error = nil;
+  NSRegularExpression* regex =
       [NSRegularExpression regularExpressionWithPattern:@"(\\d+)\\s+0\\s+R"
                                                 options:0
                                                   error:&error];
@@ -3024,8 +3119,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [regex enumerateMatchesInString:text
                           options:0
                             range:NSMakeRange(0, text.length)
-                       usingBlock:^(NSTextCheckingResult *match,
-                                    NSMatchingFlags flags, BOOL *stop) {
+                       usingBlock:^(NSTextCheckingResult* match,
+                                    NSMatchingFlags flags, BOOL* stop) {
                          NSRange matchRange = [match range];
                          NSLog(@"[Inspector] 找到匹配: %@, 范围: %@",
                                [text substringWithRange:matchRange],
@@ -3034,7 +3129,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
                          if (charIndex >= matchRange.location &&
                              charIndex <=
                                  matchRange.location + matchRange.length) {
-                           NSString *objNumStr =
+                           NSString* objNumStr =
                                [text substringWithRange:[match rangeAtIndex:1]];
                            targetObjNum = (uint32_t)[objNumStr integerValue];
                            foundRange = matchRange;
@@ -3046,8 +3141,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   // 如果找到目标对象号，跳转到对应位置
   if (targetObjNum > 0) {
-    NSString *objKey = [NSString stringWithFormat:@"%u", targetObjNum];
-    NSNumber *position = [self.objectPositions objectForKey:objKey];
+    NSString* objKey = [NSString stringWithFormat:@"%u", targetObjNum];
+    NSNumber* position = [self.objectPositions objectForKey:objKey];
     NSLog(@"[Inspector] 查找对象 %u 的位置，映射表中有 %lu 个对象",
           targetObjNum, self.objectPositions.count);
 
@@ -3056,13 +3151,13 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
       NSRange targetRange = NSMakeRange(targetPos, 0);
       [self.inspectorTextView scrollRangeToVisible:targetRange];
       [self.inspectorTextView
-          setSelectedRange:NSMakeRange(targetPos, 20)]; // 高亮显示更多字符
+          setSelectedRange:NSMakeRange(targetPos, 20)];  // 高亮显示更多字符
       NSLog(@"[Inspector] 成功跳转到对象 %u，位置：%lu", targetObjNum,
             targetPos);
     } else {
       NSLog(@"[Inspector] 未找到对象 %u 的位置信息", targetObjNum);
       // 打印所有可用的对象号
-      NSArray *allKeys = [self.objectPositions.allKeys
+      NSArray* allKeys = [self.objectPositions.allKeys
           sortedArrayUsingSelector:@selector(compare:)];
       NSLog(@"[Inspector] 可用对象号: %@", allKeys);
     }
@@ -3077,7 +3172,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
 @implementation AppDelegate (FileActions)
 
-- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
+- (BOOL)validateMenuItem:(NSMenuItem*)menuItem {
   if (menuItem.action == @selector(exportPNG:)) {
     BOOL enable = ([self.view document] != nullptr);
     NSLog(@"[PdfWinViewer][menu] validate exportPNG enable=%@",
@@ -3090,7 +3185,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 - (IBAction)openDocument:(id)sender {
   NSLog(@"[PdfWinViewer] openDocument clicked");
   [NSApp activateIgnoringOtherApps:YES];
-  NSOpenPanel *panel = [NSOpenPanel openPanel];
+  NSOpenPanel* panel = [NSOpenPanel openPanel];
   if (@available(macOS 12.0, *)) {
     panel.allowedContentTypes = @[ UTTypePDF ];
   } else {
@@ -3100,7 +3195,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   NSModalResponse resp = [panel runModal];
   NSLog(@"[PdfWinViewer] openPanel resp=%ld", (long)resp);
   if (resp == NSModalResponseOK) {
-    NSString *path = panel.URL.path;
+    NSString* path = panel.URL.path;
     NSLog(@"[PdfWinViewer] opening: %@", path);
     [self openPathAndAdjust:path];
   }
@@ -3124,42 +3219,43 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 @implementation AppDelegate (Recent)
 
 // 与 Windows 保持一致：统一使用 settings.json，包含 recent_files 数组
-- (NSString *)settingsJSONPath {
-  NSString *execPath = [[NSBundle mainBundle] executablePath];
-  NSString *execDir = [execPath stringByDeletingLastPathComponent];
-  NSString *path = [execDir stringByAppendingPathComponent:@"settings.json"];
+- (NSString*)settingsJSONPath {
+  NSString* execPath = [[NSBundle mainBundle] executablePath];
+  NSString* execDir = [execPath stringByDeletingLastPathComponent];
+  NSString* path = [execDir stringByAppendingPathComponent:@"settings.json"];
   NSLog(@"[PdfWinViewer] settings.json path=%@", path);
   return path;
 }
 
 - (void)loadSettingsJSON {
   self.settingsDict = [NSMutableDictionary new];
-  NSString *path = [self settingsJSONPath];
+  NSString* path = [self settingsJSONPath];
   if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
     NSLog(@"[PdfWinViewer] settings.json not found");
     return;
   }
-  NSData *data = [NSData dataWithContentsOfFile:path];
+  NSData* data = [NSData dataWithContentsOfFile:path];
   if (!data) {
     NSLog(@"[PdfWinViewer] settings.json read failed");
     return;
   }
-  NSError *err = nil;
+  NSError* err = nil;
   id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
   if (err || ![json isKindOfClass:[NSDictionary class]]) {
     NSLog(@"[PdfWinViewer] settings.json parse failed: %@", err);
     return;
   }
-  self.settingsDict = [((NSDictionary *)json) mutableCopy];
+  self.settingsDict = [((NSDictionary*)json) mutableCopy];
   NSLog(@"[PdfWinViewer] settings loaded with %lu keys",
         (unsigned long)self.settingsDict.count);
 }
 
 - (void)saveSettingsJSON {
-  if (!self.settingsDict)
+  if (!self.settingsDict) {
     self.settingsDict = [NSMutableDictionary new];
-  NSError *err = nil;
-  NSData *data =
+  }
+  NSError* err = nil;
+  NSData* data =
       [NSJSONSerialization dataWithJSONObject:self.settingsDict
                                       options:NSJSONWritingPrettyPrinted
                                         error:&err];
@@ -3167,12 +3263,13 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     NSLog(@"[PdfWinViewer] Failed to serialize settings.json: %@", err);
     return;
   }
-  NSString *path = [self settingsJSONPath];
+  NSString* path = [self settingsJSONPath];
   BOOL ok = [data writeToFile:path options:NSDataWritingAtomic error:&err];
-  if (!ok || err)
+  if (!ok || err) {
     NSLog(@"[PdfWinViewer] Failed to write settings.json: %@", err);
-  else
+  } else {
     NSLog(@"[PdfWinViewer] settings.json saved OK");
+  }
 }
 
 - (void)extractRecentFromSettings {
@@ -3182,56 +3279,60 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     NSLog(@"[PdfWinViewer] settings has no recent_files (or wrong type)");
     return;
   }
-  for (id item in (NSArray *)arr) {
+  for (id item in (NSArray*)arr) {
     if ([item isKindOfClass:[NSString class]] &&
-        [((NSString *)item) length] > 0) {
-      if (![self.recentPaths containsObject:item])
+        [((NSString*)item) length] > 0) {
+      if (![self.recentPaths containsObject:item]) {
         [self.recentPaths addObject:item];
-      if (self.recentPaths.count >= 10)
+      }
+      if (self.recentPaths.count >= 10) {
         break;
+      }
     }
   }
   NSLog(@"[PdfWinViewer] recent_files loaded: %@", self.recentPaths);
 }
 
 - (void)persistRecentIntoSettings {
-  if (!self.settingsDict)
+  if (!self.settingsDict) {
     self.settingsDict = [NSMutableDictionary new];
+  }
   self.settingsDict[@"recent_files"] = [self.recentPaths copy];
   [self saveSettingsJSON];
 }
 
-- (void)openPathAndAdjust:(NSString *)path {
+- (void)openPathAndAdjust:(NSString*)path {
   if (path.length == 0) {
     LOG_WARNING("openPathAndAdjust: 路径为空");
     return;
   }
-  
+
   NSLog(@"[PdfWinViewer] openPathAndAdjust: %@", path);
   LOG_INFO_F("用户请求打开文件：%s", [[path lastPathComponent] UTF8String]);
-  
+
   // 检查文件是否存在
   if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
     LOG_ERROR_F("文件不存在：%s", [path UTF8String]);
-    NSAlert *alert = [NSAlert new];
+    NSAlert* alert = [NSAlert new];
     alert.messageText = @"文件不存在";
     alert.informativeText = path;
     [alert runModal];
     return;
   }
-  
+
   // 获取文件大小
-  NSError *error = nil;
-  NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:&error];
+  NSError* error = nil;
+  NSDictionary* attrs =
+      [[NSFileManager defaultManager] attributesOfItemAtPath:path error:&error];
   if (attrs) {
     unsigned long long fileSize = [attrs fileSize];
     LOG_INFO_F("文件大小：%.2f MB", fileSize / (1024.0 * 1024.0));
   }
-  
+
   if ([self.view openPDFAtPath:path]) {
     NSLog(@"[StatusBar] PDF文件打开成功，准备更新状态栏");
     LOG_INFO("PDF 文件加载成功，开始初始化界面");
-    
+
     [self rebuildToc];
     [self.window makeFirstResponder:self.view];
     // 更新状态栏显示（确保状态栏已初始化）
@@ -3245,13 +3346,13 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     [self highlightCurrentBookmark];
     // 根据文档页尺寸调整窗口适配（保持在屏幕可视范围内）
     NSSize s = [self.view currentPageSizePt];
-    CGFloat newW = MIN(MAX(800, s.width + 300), 1600); // 预留左栏与边距
+    CGFloat newW = MIN(MAX(800, s.width + 300), 1600);  // 预留左栏与边距
     CGFloat newH = MIN(MAX(600, s.height + 120), 1200);
     NSRect f = self.window.frame;
     f.size = NSMakeSize(newW, newH);
     [self.window setFrame:f display:YES animate:YES];
     LOG_DEBUG_F("窗口大小调整为：%.0f x %.0f", newW, newH);
-    
+
     // 更新窗口标题
     self.window.title = [NSString
         stringWithFormat:@"PdfWinViewer - %@", path.lastPathComponent];
@@ -3259,19 +3360,21 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     [self addRecentPath:path];
     NSLog(@"[PdfWinViewer] after addRecentPath, recent count=%lu",
           (unsigned long)self.recentPaths.count);
-    LOG_DEBUG_F("已添加到最近文件列表，当前列表数量：%lu", (unsigned long)self.recentPaths.count);
-    
+    LOG_DEBUG_F("已添加到最近文件列表，当前列表数量：%lu",
+                (unsigned long)self.recentPaths.count);
+
     // 启用"导出当前页为 PNG"
-    NSMenu *fileMenu = [[[NSApp mainMenu] itemWithTitle:@"文件"] submenu];
-    NSMenuItem *exp = [fileMenu itemWithTag:9901];
-    if (exp)
+    NSMenu* fileMenu = [[[NSApp mainMenu] itemWithTitle:@"文件"] submenu];
+    NSMenuItem* exp = [fileMenu itemWithTag:9901];
+    if (exp) {
       [exp setEnabled:YES];
-    
+    }
+
     LOG_INFO_F("文件打开完成：%s", [[path lastPathComponent] UTF8String]);
     LOG_INFO_F("========================================");
   } else {
     LOG_ERROR_F("无法打开 PDF 文件：%s", [path UTF8String]);
-    NSAlert *alert = [NSAlert new];
+    NSAlert* alert = [NSAlert new];
     alert.messageText = @"无法打开 PDF";
     alert.informativeText = path ?: @"";
     [alert runModal];
@@ -3279,13 +3382,14 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 - (void)rebuildRecentMenu {
-  if (!self.recentMenu)
+  if (!self.recentMenu) {
     return;
+  }
   [self.recentMenu removeAllItems];
   NSUInteger count = self.recentPaths.count;
   NSLog(@"[PdfWinViewer] rebuildRecentMenu count=%lu", (unsigned long)count);
   if (count == 0) {
-    NSMenuItem *none = [[NSMenuItem alloc] initWithTitle:@"无最近项目"
+    NSMenuItem* none = [[NSMenuItem alloc] initWithTitle:@"无最近项目"
                                                   action:nil
                                            keyEquivalent:@""];
     none.enabled = NO;
@@ -3295,14 +3399,14 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   }
   self.recentMenuItem.enabled = YES;
   NSUInteger idx = 0;
-  for (NSString *path in self.recentPaths) {
+  for (NSString* path in self.recentPaths) {
     NSLog(@"[PdfWinViewer] recent item %lu: %@", (unsigned long)idx, path);
-    NSString *title =
+    NSString* title =
         path.lastPathComponent.length ? path.lastPathComponent : path;
     // 带序号
-    NSString *label =
+    NSString* label =
         [NSString stringWithFormat:@"%lu. %@", (unsigned long)(idx + 1), title];
-    NSMenuItem *it = [self.recentMenu addItemWithTitle:label
+    NSMenuItem* it = [self.recentMenu addItemWithTitle:label
                                                 action:@selector(openRecent:)
                                          keyEquivalent:@""];
     it.target = self;
@@ -3310,17 +3414,19 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     idx++;
   }
   [self.recentMenu addItem:[NSMenuItem separatorItem]];
-  NSMenuItem *clear = [self.recentMenu addItemWithTitle:@"清空最近浏览"
+  NSMenuItem* clear = [self.recentMenu addItemWithTitle:@"清空最近浏览"
                                                  action:@selector(clearRecent:)
                                           keyEquivalent:@""];
   clear.target = self;
 }
 
-- (void)addRecentPath:(NSString *)path {
-  if (path.length == 0)
+- (void)addRecentPath:(NSString*)path {
+  if (path.length == 0) {
     return;
-  if (!self.recentPaths)
+  }
+  if (!self.recentPaths) {
     self.recentPaths = [NSMutableArray new];
+  }
   // 去重并置顶
   [self.recentPaths removeObject:path];
   [self.recentPaths insertObject:path atIndex:0];
@@ -3336,15 +3442,17 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 - (IBAction)openRecent:(id)sender {
-  if (![sender isKindOfClass:[NSMenuItem class]])
+  if (![sender isKindOfClass:[NSMenuItem class]]) {
     return;
-  NSString *path = ((NSMenuItem *)sender).representedObject;
+  }
+  NSString* path = ((NSMenuItem*)sender).representedObject;
   NSLog(@"[PdfWinViewer] openRecent: %@", path);
-  if (path.length == 0)
+  if (path.length == 0) {
     return;
+  }
   BOOL exists = [[NSFileManager defaultManager] fileExistsAtPath:path];
   if (!exists) {
-    NSAlert *alert = [NSAlert new];
+    NSAlert* alert = [NSAlert new];
     alert.messageText = @"文件不存在";
     alert.informativeText = path;
     [alert runModal];
@@ -3380,7 +3488,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
         NSStringFromRect(self.statusBar.frame));
 
   // 添加分隔线
-  NSView *separator = [[NSView alloc] initWithFrame:NSMakeRect(0, 29, 800, 1)];
+  NSView* separator = [[NSView alloc] initWithFrame:NSMakeRect(0, 29, 800, 1)];
   separator.wantsLayer = YES;
   separator.layer.backgroundColor = [[NSColor separatorColor] CGColor];
   separator.autoresizingMask = NSViewWidthSizable;
@@ -3456,7 +3564,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   self.bookmarkControlBar.layer.backgroundColor =
       [[NSColor controlBackgroundColor] CGColor];
   self.bookmarkControlBar.autoresizingMask =
-      NSViewHeightSizable; // 只允许高度自适应，宽度固定
+      NSViewHeightSizable;  // 只允许高度自适应，宽度固定
 
   // 创建展开/收起按钮（垂直居中，水平居中）
   CGFloat buttonWidth = 16;
@@ -3468,7 +3576,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   self.bookmarkToggleButton = [[NSButton alloc]
       initWithFrame:NSMakeRect(xCenter, yCenter, buttonWidth, buttonHeight)];
   self.bookmarkToggleButton.title =
-      @"▶"; // 右箭头表示可以展开（收起状态下显示）
+      @"▶";  // 右箭头表示可以展开（收起状态下显示）
   self.bookmarkToggleButton.font = [NSFont systemFontOfSize:10];
   self.bookmarkToggleButton.bordered = NO;
   self.bookmarkToggleButton.target = self;
@@ -3487,8 +3595,9 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 - (void)setBookmarkVisible:(BOOL)visible animated:(BOOL)animated {
-  if (self.bookmarkVisible == visible)
-    return; // 状态未改变
+  if (self.bookmarkVisible == visible) {
+    return;  // 状态未改变
+  }
 
   self.bookmarkVisible = visible;
   NSLog(@"[BookmarkControl] 设置书签可见性: %@", visible ? @"显示" : @"隐藏");
@@ -3503,15 +3612,15 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     // 如果要展开，先创建展开状态的控件并隐藏收起状态的控制栏
     if (visible) {
       [self createExpandedBookmarkControls];
-      self.bookmarkControlBar.hidden = YES; // 隐藏收起状态的控制栏
+      self.bookmarkControlBar.hidden = YES;  // 隐藏收起状态的控制栏
     } else {
       // 如果要收起，显示收起状态的控制栏
       self.bookmarkControlBar.hidden = NO;
     }
 
     [NSAnimationContext
-        runAnimationGroup:^(NSAnimationContext *context) {
-          context.duration = 0.25; // 动画持续时间
+        runAnimationGroup:^(NSAnimationContext* context) {
+          context.duration = 0.25;  // 动画持续时间
           context.allowsImplicitAnimation = YES;
 
           // 调整左侧面板宽度 - 这是关键修复
@@ -3557,13 +3666,13 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
     if (visible) {
       [self createExpandedBookmarkControls];
-      self.bookmarkControlBar.hidden = YES; // 隐藏收起状态的控制栏
+      self.bookmarkControlBar.hidden = YES;  // 隐藏收起状态的控制栏
       // 立即更新控制栏布局
       [self updateExpandedControlBarLayout];
       NSLog(@"[BookmarkControl] 立即展开，隐藏收起状态控制栏");
     } else {
       [self removeExpandedBookmarkControls];
-      self.bookmarkControlBar.hidden = NO; // 显示收起状态的控制栏
+      self.bookmarkControlBar.hidden = NO;  // 显示收起状态的控制栏
       NSLog(@"[BookmarkControl] 立即收起，显示收起状态控制栏");
     }
   }
@@ -3595,9 +3704,10 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
       });
 }
 
-- (TocNode *)findBookmarkForPage:(int)pageIndex inNode:(TocNode *)node {
-  if (!node)
+- (TocNode*)findBookmarkForPage:(int)pageIndex inNode:(TocNode*)node {
+  if (!node) {
     return nil;
+  }
 
   NSLog(@"[BookmarkSearch] 搜索页面 %d，检查节点: %@ (页面: %d)", pageIndex,
         node.title, node.pageIndex);
@@ -3609,7 +3719,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   }
 
   // 查找最接近的书签（页面索引小于等于当前页面的最大值）
-  TocNode *bestMatch = nil;
+  TocNode* bestMatch = nil;
   if (node.pageIndex >= 0 && node.pageIndex <= pageIndex) {
     bestMatch = node;
     NSLog(@"[BookmarkSearch] 当前最佳匹配: %@ (页面: %d)", bestMatch.title,
@@ -3617,8 +3727,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   }
 
   // 递归搜索子节点
-  for (TocNode *child in node.children) {
-    TocNode *childMatch = [self findBookmarkForPage:pageIndex inNode:child];
+  for (TocNode* child in node.children) {
+    TocNode* childMatch = [self findBookmarkForPage:pageIndex inNode:child];
     if (childMatch) {
       // 如果找到精确匹配，直接返回
       if (childMatch.pageIndex == pageIndex) {
@@ -3647,7 +3757,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   NSLog(@"[BookmarkHighlight] 当前页面: %d", currentPage);
 
   // 查找对应的书签
-  TocNode *targetBookmark = [self findBookmarkForPage:currentPage
+  TocNode* targetBookmark = [self findBookmarkForPage:currentPage
                                                inNode:self.tocRoot];
   if (targetBookmark) {
     NSLog(@"[BookmarkHighlight] 找到匹配书签: %@ (页面 %d)",
@@ -3664,8 +3774,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
       // 平滑滚动到选中的书签，确保其可见
       [NSAnimationContext
-          runAnimationGroup:^(NSAnimationContext *context) {
-            context.duration = 0.3; // 平滑滚动动画
+          runAnimationGroup:^(NSAnimationContext* context) {
+            context.duration = 0.3;  // 平滑滚动动画
             context.allowsImplicitAnimation = YES;
             [self.outline.animator scrollRowToVisible:row];
           }
@@ -3686,28 +3796,30 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   }
 }
 
-- (void)expandParentsOfItem:(TocNode *)item {
-  if (!item || !self.tocRoot)
+- (void)expandParentsOfItem:(TocNode*)item {
+  if (!item || !self.tocRoot) {
     return;
+  }
 
   // 查找item的父节点路径
-  NSMutableArray *parentPath = [NSMutableArray array];
+  NSMutableArray* parentPath = [NSMutableArray array];
   [self findParentPathForItem:item inNode:self.tocRoot parentPath:parentPath];
 
   // 展开所有父节点
-  for (TocNode *parent in parentPath) {
-    if (parent != self.tocRoot) { // 不展开根节点
+  for (TocNode* parent in parentPath) {
+    if (parent != self.tocRoot) {  // 不展开根节点
       [self.outline expandItem:parent];
       NSLog(@"[BookmarkHighlight] 展开父节点: %@", parent.title);
     }
   }
 }
 
-- (BOOL)findParentPathForItem:(TocNode *)targetItem
-                       inNode:(TocNode *)currentNode
-                   parentPath:(NSMutableArray *)path {
-  if (!currentNode)
+- (BOOL)findParentPathForItem:(TocNode*)targetItem
+                       inNode:(TocNode*)currentNode
+                   parentPath:(NSMutableArray*)path {
+  if (!currentNode) {
     return NO;
+  }
 
   // 将当前节点加入路径
   [path addObject:currentNode];
@@ -3718,7 +3830,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   }
 
   // 在子节点中搜索
-  for (TocNode *child in currentNode.children) {
+  for (TocNode* child in currentNode.children) {
     if ([self findParentPathForItem:targetItem inNode:child parentPath:path]) {
       return YES;
     }
@@ -3734,11 +3846,11 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   // 完全隐藏收起状态的控制栏，确保不会阻挡事件
   self.bookmarkControlBar.hidden = YES;
-  self.bookmarkControlBar.alphaValue = 0.0;      // 完全透明
-  [self.bookmarkControlBar removeFromSuperview]; // 临时从视图层次中移除
+  self.bookmarkControlBar.alphaValue = 0.0;       // 完全透明
+  [self.bookmarkControlBar removeFromSuperview];  // 临时从视图层次中移除
 
   // 创建顶部控制栏（包含标题、+/-按钮）
-  CGFloat expandedWidth = self.leftPanel.bounds.size.width; // 使用实际面板宽度
+  CGFloat expandedWidth = self.leftPanel.bounds.size.width;  // 使用实际面板宽度
   CGFloat controlBarY = self.leftPanel.bounds.size.height - kControlBarHeight;
   NSLog(@"[ScrollDebug] 创建expandedTopControlBar: width=%.1f, y=%.1f, "
         @"leftPanel.bounds=%@",
@@ -3756,15 +3868,15 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
       NSViewWidthSizable | NSViewMinYMargin;
 
   // 添加底部分隔线
-  NSView *separator =
+  NSView* separator =
       [[NSView alloc] initWithFrame:NSMakeRect(0, 0, expandedWidth, 1)];
   separator.wantsLayer = YES;
   separator.layer.backgroundColor = [[NSColor separatorColor] CGColor];
-  separator.autoresizingMask = NSViewWidthSizable; // 分隔线随宽度自动调整
+  separator.autoresizingMask = NSViewWidthSizable;  // 分隔线随宽度自动调整
   [self.expandedTopControlBar addSubview:separator];
 
   // 添加标题标签
-  NSTextField *titleLabel =
+  NSTextField* titleLabel =
       [[NSTextField alloc] initWithFrame:NSMakeRect(10, 6, 50, 18)];
   titleLabel.stringValue = @"书签";
   titleLabel.font = [NSFont systemFontOfSize:13];
@@ -3776,7 +3888,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [self.expandedTopControlBar addSubview:titleLabel];
 
   // 添加展开所有按钮（+）
-  NSButton *expandAllButton =
+  NSButton* expandAllButton =
       [[NSButton alloc] initWithFrame:NSMakeRect(70, 3, 24, 24)];
   expandAllButton.title = @"+";
   expandAllButton.font = [NSFont systemFontOfSize:14];
@@ -3788,7 +3900,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
         NSStringFromRect(expandAllButton.frame), expandAllButton.superview);
 
   // 添加折叠所有按钮（-）
-  NSButton *collapseAllButton =
+  NSButton* collapseAllButton =
       [[NSButton alloc] initWithFrame:NSMakeRect(100, 3, 24, 24)];
   collapseAllButton.title = @"−";
   collapseAllButton.font = [NSFont systemFontOfSize:14];
@@ -3805,14 +3917,14 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   CGFloat rightMargin = 4;
   CGFloat yCenter = (kControlBarHeight - buttonHeight) / 2;
   CGFloat buttonX = expandedWidth - buttonWidth - rightMargin;
-  NSButton *collapseButton = [[NSButton alloc]
+  NSButton* collapseButton = [[NSButton alloc]
       initWithFrame:NSMakeRect(buttonX, yCenter, buttonWidth, buttonHeight)];
-  collapseButton.title = @"◀"; // 左箭头表示可以收起
+  collapseButton.title = @"◀";  // 左箭头表示可以收起
   collapseButton.font = [NSFont systemFontOfSize:10];
   collapseButton.bordered = NO;
   collapseButton.target = self;
   collapseButton.action = @selector(toggleBookmarkVisibility:);
-  collapseButton.autoresizingMask = NSViewMinXMargin; // 右对齐，随面板宽度调整
+  collapseButton.autoresizingMask = NSViewMinXMargin;  // 右对齐，随面板宽度调整
   [self.expandedTopControlBar addSubview:collapseButton];
   NSLog(
       @"[BookmarkControl] ◀按钮创建: frame=%@, expandedTopControlBar.bounds=%@",
@@ -3847,10 +3959,10 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     // 更新展开状态控制栏布局
     [self updateExpandedControlBarLayout];
 
-    [self forceTraditionalScrollBar]; // 强制使用传统滚动条
+    [self forceTraditionalScrollBar];  // 强制使用传统滚动条
     [self updateBookmarkScrollView];
     [self ensureBookmarkScrollBarVisible];
-    [self checkScrollBarOverlap]; // 检查滚动条是否被遮挡
+    [self checkScrollBarOverlap];  // 检查滚动条是否被遮挡
   });
 }
 
@@ -3866,7 +3978,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   // 恢复收起状态的控制栏
   [self.leftPanel addSubview:self.bookmarkControlBar];
   self.bookmarkControlBar.hidden = NO;
-  self.bookmarkControlBar.alphaValue = 1.0; // 恢复不透明
+  self.bookmarkControlBar.alphaValue = 1.0;  // 恢复不透明
 
   // 隐藏书签列表
   self.outlineScroll.hidden = YES;
@@ -3911,7 +4023,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     }
 
     NSLog(@"[StatusBar] 获取页面信息...");
-    int currentPage = [self.view currentPageIndex] + 1; // 显示从1开始的页码
+    int currentPage = [self.view currentPageIndex] + 1;  // 显示从1开始的页码
     int totalPages = FPDF_GetPageCount(doc);
 
     NSLog(@"[StatusBar] 当前页: %d, 总页数: %d", currentPage, totalPages);
@@ -3926,14 +4038,15 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
     NSLog(@"[StatusBar] 状态栏更新完成: %@ %@", self.pageInput.stringValue,
           self.totalPagesLabel.stringValue);
-  } @catch (NSException *exception) {
+  } @catch (NSException* exception) {
     NSLog(@"[StatusBar] 异常: %@", exception);
   }
 }
 
 - (void)onPrevPage:(id)sender {
-  if (!self.view || ![self.view document])
+  if (!self.view || ![self.view document]) {
     return;
+  }
   int currentPage = [self.view currentPageIndex];
   if (currentPage > 0) {
     [self.view goToPage:currentPage - 1];
@@ -3942,8 +4055,9 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 - (void)onNextPage:(id)sender {
-  if (!self.view || ![self.view document])
+  if (!self.view || ![self.view document]) {
     return;
+  }
   int totalPages = FPDF_GetPageCount([self.view document]);
   int currentPage = [self.view currentPageIndex];
   if (currentPage < totalPages - 1) {
@@ -3953,27 +4067,28 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 - (void)onPageInputChanged:(id)sender {
-  if (!self.view || ![self.view document])
+  if (!self.view || ![self.view document]) {
     return;
+  }
 
-  NSString *input = self.pageInput.stringValue;
+  NSString* input = self.pageInput.stringValue;
   int pageNum = [input intValue];
   int totalPages = FPDF_GetPageCount([self.view document]);
 
   // 边界检查：确保页码在有效范围内
   int validPageNum = pageNum;
   if (pageNum < 1) {
-    validPageNum = 1; // 小于最小值时使用最小值
+    validPageNum = 1;  // 小于最小值时使用最小值
     NSLog(@"[PageNavigation] 状态栏输入页码%d小于1，调整为最小值: %d", pageNum,
           validPageNum);
   } else if (pageNum > totalPages) {
-    validPageNum = totalPages; // 大于最大值时使用最大值
+    validPageNum = totalPages;  // 大于最大值时使用最大值
     NSLog(@"[PageNavigation] 状态栏输入页码%d超过最大值%d，调整为最大值: %d",
           pageNum, totalPages, validPageNum);
   }
 
   // 应用有效的页码
-  [self.view goToPage:validPageNum - 1]; // 转换为0开始的索引
+  [self.view goToPage:validPageNum - 1];  // 转换为0开始的索引
   NSLog(@"[PageNavigation] 状态栏页码设置为: %d (索引: %d)", validPageNum,
         validPageNum - 1);
   [self updateStatusBar];
@@ -4005,13 +4120,14 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   self.inspectorPanel = [[NSView alloc]
       initWithFrame:NSMakeRect(0, 0, kInspectorWidth,
                                self.rightPanel.bounds.size.height)];
-  self.inspectorPanel.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  self.inspectorPanel.autoresizingMask =
+      NSViewWidthSizable | NSViewHeightSizable;
   self.inspectorPanel.wantsLayer = YES;
   self.inspectorPanel.layer.backgroundColor =
       [[NSColor controlBackgroundColor] CGColor];
 
   // 添加标题栏
-  NSView *titleBar = [[NSView alloc]
+  NSView* titleBar = [[NSView alloc]
       initWithFrame:NSMakeRect(0,
                                self.inspectorPanel.bounds.size.height -
                                    kControlBarHeight,
@@ -4021,7 +4137,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   titleBar.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
 
   // 添加标题
-  NSTextField *titleLabel =
+  NSTextField* titleLabel =
       [[NSTextField alloc] initWithFrame:NSMakeRect(10, 6, 100, 18)];
   titleLabel.stringValue = @"页面元素";
   titleLabel.font = [NSFont boldSystemFontOfSize:13];
@@ -4033,7 +4149,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [titleBar addSubview:titleLabel];
 
   // 添加收起按钮
-  NSButton *collapseButton = [[NSButton alloc]
+  NSButton* collapseButton = [[NSButton alloc]
       initWithFrame:NSMakeRect(kInspectorWidth - 30, 5, 20, 20)];
   collapseButton.title = @"◀";
   collapseButton.font = [NSFont systemFontOfSize:10];
@@ -4044,7 +4160,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   [titleBar addSubview:collapseButton];
 
   // 添加底部分隔线
-  NSView *separator =
+  NSView* separator =
       [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kInspectorWidth, 1)];
   separator.wantsLayer = YES;
   separator.layer.backgroundColor = [[NSColor separatorColor] CGColor];
@@ -4063,7 +4179,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   // 初始化对象位置映射
   self.objectPositions = [[NSMutableDictionary alloc] init];
-  self.inspectorTextView.delegate = self; // 设置代理以处理点击事件
+  self.inspectorTextView.delegate = self;  // 设置代理以处理点击事件
   self.inspectorTextView.font =
       [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
   self.inspectorTextView.textColor = [NSColor labelColor];
@@ -4080,11 +4196,11 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   // 设置文本视图的自动调整行为
   self.inspectorTextView.autoresizingMask =
       NSViewWidthSizable | NSViewHeightSizable;
-  self.inspectorTextView.horizontallyResizable = NO; // 禁用水平调整
-  self.inspectorTextView.verticallyResizable = YES;  // 启用垂直调整
+  self.inspectorTextView.horizontallyResizable = NO;  // 禁用水平调整
+  self.inspectorTextView.verticallyResizable = YES;   // 启用垂直调整
 
   // 添加鼠标点击事件监听
-  NSClickGestureRecognizer *clickGesture = [[NSClickGestureRecognizer alloc]
+  NSClickGestureRecognizer* clickGesture = [[NSClickGestureRecognizer alloc]
       initWithTarget:self
               action:@selector(inspectorTextViewClicked:)];
   [self.inspectorTextView addGestureRecognizer:clickGesture];
@@ -4111,8 +4227,9 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 - (void)setInspectorVisible:(BOOL)visible animated:(BOOL)animated {
-  if (self.inspectorVisible == visible)
-    return; // 状态未改变
+  if (self.inspectorVisible == visible) {
+    return;  // 状态未改变
+  }
 
   self.inspectorVisible = visible;
   NSLog(@"[Inspector] 设置检查器可见性: %@", visible ? @"显示" : @"隐藏");
@@ -4122,13 +4239,15 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   self.inspectorToggleButton.title = visible ? @"▶" : @"◀";
 
   // 获取右侧分割视图
-  NSSplitView *rightSplit = (NSSplitView *)self.rightPanel.subviews.firstObject;
-  if (![rightSplit isKindOfClass:[NSSplitView class]])
+  NSSplitView* rightSplit = (NSSplitView*)self.rightPanel.subviews.firstObject;
+  if (![rightSplit isKindOfClass:[NSSplitView class]]) {
     return;
+  }
 
   // 使用 NSSplitView 的折叠功能来完全收起/展开面板
   // inspectorPanel 是第二个子视图（index 1）
-  BOOL inspectorAttached = [rightSplit.subviews containsObject:self.inspectorPanel];
+  BOOL inspectorAttached =
+      [rightSplit.subviews containsObject:self.inspectorPanel];
 
   if (visible) {
     // 确保检查器面板已经添加到 split view 中
@@ -4149,7 +4268,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     [rightSplit setPosition:newPosition ofDividerAtIndex:0];
     [rightSplit layoutSubtreeIfNeeded];
 
-    NSLog(@"[Inspector] 检查器面板展开，frame: %@", NSStringFromRect(self.inspectorPanel.frame));
+    NSLog(@"[Inspector] 检查器面板展开，frame: %@",
+          NSStringFromRect(self.inspectorPanel.frame));
 
     // 更新面板布局和内容
     [self updateInspectorLayout];
@@ -4174,7 +4294,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
       [rightSplit adjustSubviews];
     }
 
-    NSLog(@"[Inspector] 检查器收起完成，pdfContentView frame: %@, inspectorPanel frame: %@, 按钮 frame: %@",
+    NSLog(@"[Inspector] 检查器收起完成，pdfContentView frame: %@, "
+          @"inspectorPanel frame: %@, 按钮 frame: %@",
           NSStringFromRect(self.pdfContentView.frame),
           NSStringFromRect(self.inspectorPanel.frame),
           NSStringFromRect(self.inspectorToggleButton.frame));
@@ -4182,12 +4303,13 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 - (void)updateInspectorLayout {
-  if (!self.inspectorVisible || !self.inspectorTextView)
+  if (!self.inspectorVisible || !self.inspectorTextView) {
     return;
+  }
 
   // 更新文本容器大小以适应窗口变化
   NSRect currentFrame = self.inspectorScrollView.frame;
-  CGFloat newWidth = currentFrame.size.width - 20; // 减去滚动条和边距
+  CGFloat newWidth = currentFrame.size.width - 20;  // 减去滚动条和边距
 
   self.inspectorTextView.textContainer.containerSize =
       NSMakeSize(newWidth, CGFLOAT_MAX);
@@ -4197,16 +4319,17 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 // 递归显示对象树节点
-- (void)displayObjectTreeNode:(PDFIUM_EX_OBJECT_TREE_NODE *)node
-             attributedString:(NSMutableAttributedString *)attributedInfo
-                  normalAttrs:(NSDictionary *)normalAttrs
-                  objNumAttrs:(NSDictionary *)objNumAttrs {
-  if (!node || !attributedInfo || !normalAttrs || !objNumAttrs)
+- (void)displayObjectTreeNode:(PDFIUM_EX_OBJECT_TREE_NODE*)node
+             attributedString:(NSMutableAttributedString*)attributedInfo
+                  normalAttrs:(NSDictionary*)normalAttrs
+                  objNumAttrs:(NSDictionary*)objNumAttrs {
+  if (!node || !attributedInfo || !normalAttrs || !objNumAttrs) {
     return;
+  }
 
   // 安全检查：防止递归过深
   if (node->depth > 10) {
-    NSString *warningStr = [NSString
+    NSString* warningStr = [NSString
         stringWithFormat:@"[警告] 对象 %u 递归深度过深，已停止展开\n\n",
                          node->obj_num];
     [attributedInfo appendAttributedString:[[NSAttributedString alloc]
@@ -4217,11 +4340,11 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   // 记录对象在文本中的位置（用于点击跳转）
   NSUInteger objStartPosition = attributedInfo.length;
-  NSString *objKey = [NSString stringWithFormat:@"%u", node->obj_num];
+  NSString* objKey = [NSString stringWithFormat:@"%u", node->obj_num];
   [self.objectPositions setObject:@(objStartPosition) forKey:objKey];
 
   // 显示对象号（天空蓝色）
-  NSString *objNumStr =
+  NSString* objNumStr =
       [NSString stringWithFormat:@"%u %u obj", node->obj_num, node->gen_num];
   if (objNumStr) {
     [attributedInfo appendAttributedString:[[NSAttributedString alloc]
@@ -4234,10 +4357,10 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   // 显示对象内容（安全检查）
   if (node->raw_content && strlen(node->raw_content) > 0) {
-    NSString *contentStr = [NSString stringWithUTF8String:node->raw_content];
+    NSString* contentStr = [NSString stringWithUTF8String:node->raw_content];
     if (contentStr && contentStr.length > 0) {
       // 创建带颜色的内容字符串，将对象引用标记为绿色
-      NSMutableAttributedString *coloredContent =
+      NSMutableAttributedString* coloredContent =
           [self colorizeObjectReferences:contentStr normalAttrs:normalAttrs];
       [attributedInfo appendAttributedString:coloredContent];
       [attributedInfo appendAttributedString:[[NSAttributedString alloc]
@@ -4252,7 +4375,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   // 如果有子节点，直接显示子节点（添加安全检查）
   if (node->children && node->child_count > 0 &&
-      node->child_count < 200) { // 增加子节点数量限制
+      node->child_count < 200) {  // 增加子节点数量限制
     for (int i = 0; i < node->child_count; i++) {
       if (node->children[i]) {
         [self displayObjectTreeNode:node->children[i]
@@ -4265,8 +4388,9 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 - (void)updateInspectorContent {
-  if (!self.inspectorVisible || !self.inspectorTextView || !self.view)
+  if (!self.inspectorVisible || !self.inspectorTextView || !self.view) {
     return;
+  }
 
   FPDF_DOCUMENT doc = [self.view document];
   if (!doc) {
@@ -4292,25 +4416,25 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
   int objectCount = FPDFPage_CountObjects(page);
 
   // 构建带颜色的属性文本
-  NSMutableAttributedString *attributedInfo =
+  NSMutableAttributedString* attributedInfo =
       [[NSMutableAttributedString alloc] init];
 
   // 基础文本属性
-  NSDictionary *normalAttrs = @{
+  NSDictionary* normalAttrs = @{
     NSForegroundColorAttributeName : [NSColor textColor],
     NSFontAttributeName :
         [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]
   };
 
   // 天空蓝色对象号属性
-  NSDictionary *objNumAttrs = @{
+  NSDictionary* objNumAttrs = @{
     NSForegroundColorAttributeName : [NSColor systemBlueColor],
     NSFontAttributeName : [NSFont monospacedSystemFontOfSize:12
                                                       weight:NSFontWeightBold]
   };
 
   // 添加基础信息
-  NSString *basicInfo = [NSString
+  NSString* basicInfo = [NSString
       stringWithFormat:@"PDF 文档信息\n================\n\n当前页面: %d / "
                        @"%d\n页面尺寸: %.2f x %.2f pt\n页面对象数: "
                        @"%d\n\nPDF对象引用树\n================\n",
@@ -4325,8 +4449,8 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
   // 构建PDF对象引用树
   // Note: Object tree functionality is not fully implemented yet
-  PDFIUM_EX_OBJECT_TREE_NODE *object_tree =
-      PdfiumEx_BuildObjectTree(doc, page, 1000000); // 最大深度5层，支持完整分析
+  PDFIUM_EX_OBJECT_TREE_NODE* object_tree = PdfiumEx_BuildObjectTree(
+      doc, page, 1000000);  // 最大深度5层，支持完整分析
 
   if (object_tree) {
     // 递归显示树结构
@@ -4338,7 +4462,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
     PdfiumEx_ReleaseObjectTree(object_tree);
   } else {
     // 如果对象树不可用，显示提示信息
-    NSString *treeInfo = @"\n注意: PDF对象引用树功能暂未实现\n";
+    NSString* treeInfo = @"\n注意: PDF对象引用树功能暂未实现\n";
     [attributedInfo appendAttributedString:[[NSAttributedString alloc]
                                                initWithString:treeInfo
                                                    attributes:normalAttrs]];
@@ -4354,7 +4478,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 // 处理显示窗口通知（用于单实例功能）
-- (void)handleShowWindowNotification:(NSNotification *)notification {
+- (void)handleShowWindowNotification:(NSNotification*)notification {
   NSLog(@"[PdfWinViewer] 收到显示窗口通知，激活应用并显示窗口");
   dispatch_async(dispatch_get_main_queue(), ^{
     [NSApp activateIgnoringOtherApps:YES];
@@ -4366,7 +4490,7 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 // 应用即将退出时的清理工作
-- (void)applicationWillTerminate:(NSNotification *)notification {
+- (void)applicationWillTerminate:(NSNotification*)notification {
   LOG_INFO("========================================");
   LOG_INFO("Application will terminate");
   LOG_INFO("Flushing logs...");
@@ -4376,92 +4500,116 @@ static TocNode *BuildBookmarksTree(FPDF_DOCUMENT doc) {
 }
 
 // 当最后一个窗口关闭时退出应用
-- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
   return YES;
 }
 
 @end
 
-int main(int argc, const char *argv[]) {
+int main(int argc, const char* argv[]) {
   @autoreleasepool {
+    // ========== 清空旧的 debug.log 文件（MacLog 系统） ==========
+#if PDFWV_ENABLE_LOGGING
+    MacLog_ResetFileOnStartup();
+#endif
+
     // ========== 初始化全局日志系统 ==========
     NSString* execPath = [[NSBundle mainBundle] executablePath];
     std::string app_path = [execPath UTF8String];
-    
+
     // 初始化日志：10MB 文件大小，保留 5 个历史文件
-    pdfium_viewer::Logger::GetInstance().Initialize(app_path, 10 * 1024 * 1024, 5);
-    
+    pdfium_viewer::Logger::GetInstance().Initialize(app_path, 10 * 1024 * 1024,
+                                                    5);
+
     // 设置为 DEBUG 级别（开发阶段）
-    pdfium_viewer::Logger::GetInstance().SetLevel(pdfium_viewer::LogLevel::DEBUG);
-    
-    // 开发时启用控制台输出（可选）
-    #ifdef DEBUG
+    pdfium_viewer::Logger::GetInstance().SetLevel(
+        pdfium_viewer::LogLevel::DEBUG);
+
+// 开发时启用控制台输出（可选）
+#ifdef DEBUG
     pdfium_viewer::Logger::GetInstance().SetConsoleOutput(true);
-    #endif
-    
+#endif
+
     LOG_INFO("========================================");
     LOG_INFO("PdfWinViewer Application Starting");
     LOG_INFO_F("Version: %s", "1.0.0");
     LOG_INFO_F("PID: %d", getpid());
     LOG_INFO_F("Executable: %s", app_path.c_str());
     LOG_INFO("========================================");
-    // ========================================
-    
+
+    // ========== [AP-FORM-IMAGE-WATERMARK] 初始化水印回调 ==========
+    static WatermarkCallback* g_watermark_callback = new WatermarkCallback();
+    CPDFSDK_SetApFormImageCallback(g_watermark_callback);
+    LOG_INFO("[AP-FORM-IMAGE-WATERMARK] Watermark callback registered");
+    // ================================================================
+
     // 检查是否已有实例运行
-    NSString *bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
-    NSArray<NSRunningApplication *> *runningApps = 
-        [NSRunningApplication runningApplicationsWithBundleIdentifier:bundleIdentifier];
-    
+    LOG_INFO("========================================");
+    LOG_INFO("Checking for existing instances...");
+    NSString* bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
+    LOG_INFO_F("Bundle identifier: %s", [bundleIdentifier UTF8String]);
+
+    NSArray<NSRunningApplication*>* runningApps = [NSRunningApplication
+        runningApplicationsWithBundleIdentifier:bundleIdentifier];
+    LOG_INFO_F("Found %lu running instances", (unsigned long)runningApps.count);
+
     // 获取当前进程 ID
     pid_t currentPID = [NSProcessInfo processInfo].processIdentifier;
-    
+    LOG_INFO_F("Current PID: %d", currentPID);
+
     // 检查是否有其他实例运行（排除当前进程）
-    NSRunningApplication *existingApp = nil;
-    for (NSRunningApplication *app in runningApps) {
+    NSRunningApplication* existingApp = nil;
+    for (NSRunningApplication* app in runningApps) {
+      LOG_INFO_F("  - Instance PID: %d (current: %s)", app.processIdentifier,
+                 (app.processIdentifier == currentPID ? "YES" : "NO"));
       if (app.processIdentifier != currentPID) {
         existingApp = app;
         break;
       }
     }
-    
+
     // 如果已有其他实例运行，激活它并退出
     if (existingApp) {
-      LOG_INFO_F("检测到已有实例运行（PID: %d），激活现有窗口并退出", existingApp.processIdentifier);
-      NSLog(@"[PdfWinViewer] 检测到已有实例运行（PID: %d），激活现有窗口并退出", 
+      LOG_WARNING_F(
+          "⚠️  Detected existing instance (PID: %d), activating and exiting",
+          existingApp.processIdentifier);
+      LOG_INFO_F("检测到已有实例运行（PID: %d），激活现有窗口并退出",
+                 existingApp.processIdentifier);
+      NSLog(@"[PdfWinViewer] 检测到已有实例运行（PID: %d），激活现有窗口并退出",
             existingApp.processIdentifier);
-      
+
       // 激活现有实例
       [existingApp activateWithOptions:NSApplicationActivateIgnoringOtherApps];
-      
+
       // 发送通知让已运行的实例显示窗口
       dispatch_async(dispatch_get_main_queue(), ^{
-        [[NSDistributedNotificationCenter defaultCenter] 
+        [[NSDistributedNotificationCenter defaultCenter]
             postNotificationName:@"com.zfleng.PdfWinViewer.ShowWindow"
                           object:nil
                         userInfo:nil
               deliverImmediately:YES];
       });
-      
+
       // 退出当前进程
       return 0;
     }
-    
+
     LOG_INFO("单实例检查通过，启动应用");
-    NSApplication *app = [NSApplication sharedApplication];
-    
+    NSApplication* app = [NSApplication sharedApplication];
+
     // 设置为前台应用（非后台应用）
     [app setActivationPolicy:NSApplicationActivationPolicyRegular];
-    
-    AppDelegate *del = [AppDelegate new];
+
+    AppDelegate* del = [AppDelegate new];
     app.delegate = del;
-    
+
     // 监听显示窗口通知
-    [[NSDistributedNotificationCenter defaultCenter] 
+    [[NSDistributedNotificationCenter defaultCenter]
         addObserver:del
            selector:@selector(handleShowWindowNotification:)
                name:@"com.zfleng.PdfWinViewer.ShowWindow"
              object:nil];
-    
+
     // 激活应用并显示窗口
     [app activateIgnoringOtherApps:YES];
     [app run];

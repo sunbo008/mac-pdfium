@@ -74,12 +74,20 @@ class CPDF_RenderContext {
     return page_resources_;
   }
   CPDF_PageImageCache* GetPageCache() const { return page_cache_; }
+  
+  // [AP-FORM-IMAGE-WATERMARK] 设置回调（使用 void* 避免循环依赖）
+  void SetImageCallback(void* callback) {
+    image_callback_ = callback;
+  }
+  
+  void* GetImageCallback() const { return image_callback_; }
 
  private:
   UnownedPtr<CPDF_Document> const document_;
   RetainPtr<CPDF_Dictionary> const page_resources_;
   UnownedPtr<CPDF_PageImageCache> const page_cache_;
   std::vector<Layer> layers_;
+  void* image_callback_ = nullptr;  // [AP-FORM-IMAGE-WATERMARK] CPDF_RenderStatus::ImageCallbackIface*
 };
 
 #endif  // CORE_FPDFAPI_RENDER_CPDF_RENDERCONTEXT_H_

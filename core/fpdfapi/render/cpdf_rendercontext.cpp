@@ -18,6 +18,7 @@
 #include "core/fpdfapi/render/cpdf_renderoptions.h"
 #include "core/fpdfapi/render/cpdf_renderstatus.h"
 #include "core/fpdfapi/render/cpdf_textrenderer.h"
+#include "platform/shared/logger.h"  // [AP-FORM-IMAGE-WATERMARK]
 #include "core/fxcrt/check.h"
 #include "core/fxge/cfx_defaultrenderdevice.h"
 #include "core/fxge/cfx_renderdevice.h"
@@ -63,6 +64,10 @@ void CPDF_RenderContext::Render(CFX_RenderDevice* pDevice,
                                 const CPDF_PageObject* pStopObj,
                                 const CPDF_RenderOptions* pOptions,
                                 const CFX_Matrix* pLastMatrix) {
+  // [AP-FORM-IMAGE-WATERMARK] 调试：检查 Render 入口的回调状态
+  LOG_DEBUG_F("[AP-FORM-IMAGE-WATERMARK] RenderContext::Render: image_callback_=%s",
+              (image_callback_ ? "valid" : "null"));
+  
   for (auto& layer : layers_) {
     CFX_RenderDevice::StateRestorer restorer(pDevice);
     CPDF_RenderStatus status(this, pDevice);
@@ -71,6 +76,16 @@ void CPDF_RenderContext::Render(CFX_RenderDevice* pDevice,
     }
     status.SetStopObject(pStopObj);
     status.SetTransparency(layer.GetObjectHolder()->GetTransparency());
+    
+    // [AP-FORM-IMAGE-WATERMARK] 传播回调
+    if (image_callback_) {
+      status.SetImageCallback(
+          static_cast<CPDF_RenderStatus::ImageCallbackIface*>(image_callback_));
+      LOG_DEBUG_F("[AP-FORM-IMAGE-WATERMARK] Set callback to status in Render()");
+    } else {
+      LOG_DEBUG_F("[AP-FORM-IMAGE-WATERMARK] No callback to set in Render()");
+    }
+    
     CFX_Matrix final_matrix = layer.GetMatrix();
     if (pLastMatrix) {
       final_matrix *= *pLastMatrix;

@@ -41,3 +41,19 @@ source_set("logger") {
   ]
 }
 
+source_set("watermark_callback") {
+  sources = [
+    "watermark_callback.cpp",
+    "watermark_callback.h",
+  ]
+  
+  deps = [
+    "//:pdfium",
+    ":logger",
+  ]
+  
+  configs += [
+    "//:pdfium_strict_config",
+  ]
+}
+

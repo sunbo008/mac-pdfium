@@ -45,6 +45,19 @@ class PauseIndicatorIface;
 
 class CPDF_RenderStatus {
  public:
+  // [AP-FORM-IMAGE-WATERMARK] 图片处理回调接口
+  class ImageCallbackIface {
+   public:
+    virtual ~ImageCallbackIface() = default;
+    
+    // 在 ap-form 中渲染图片时调用
+    // 返回处理后的位图，返回 nullptr 表示使用原始位图
+    virtual RetainPtr<CFX_DIBitmap> OnImageRendering(
+        CPDF_ImageObject* pImageObj,
+        const CFX_Matrix& mtObj2Device,
+        RetainPtr<CFX_DIBitmap> pOriginalBitmap) = 0;
+  };
+
   CPDF_RenderStatus(CPDF_RenderContext* pContext, CFX_RenderDevice* pDevice);
   ~CPDF_RenderStatus();
 
@@ -67,6 +80,16 @@ class CPDF_RenderStatus {
     transparency_ = transparency;
   }
   void SetInGroup(bool bInGroup) { in_group_ = bInGroup; }
+  
+  // [AP-FORM-IMAGE-WATERMARK] 设置/获取图片回调
+  void SetImageCallback(ImageCallbackIface* callback) { 
+    image_callback_ = callback; 
+  }
+  ImageCallbackIface* GetImageCallback() const { return image_callback_; }
+  
+  // [AP-FORM-IMAGE-WATERMARK] 设置/获取 ap-form 标志
+  void SetInAppearanceForm(bool in_ap) { in_appearance_form_ = in_ap; }
+  bool IsInAppearanceForm() const { return in_appearance_form_; }
 
   void Initialize(const CPDF_RenderStatus* pParentStatus,
                   const CPDF_GraphicStates* pInitialStates);
@@ -215,6 +238,8 @@ class CPDF_RenderStatus {
   bool in_group_ = false;
   CPDF_ColorSpace::Family group_family_ = CPDF_ColorSpace::Family::kUnknown;
   FX_ARGB t3_fill_color_ = 0;
+  ImageCallbackIface* image_callback_ = nullptr;  // [AP-FORM-IMAGE-WATERMARK]
+  bool in_appearance_form_ = false;  // [AP-FORM-IMAGE-WATERMARK]
 };
 
 #endif  // CORE_FPDFAPI_RENDER_CPDF_RENDERSTATUS_H_

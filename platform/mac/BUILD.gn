@@ -17,6 +17,7 @@ if (is_mac) {
       "//platform/shared:pdf_utils",
       "//platform/shared:pdfium_object_info",
       "//platform/shared:logger",
+      "//platform/shared:watermark_callback",  # [AP-FORM-IMAGE-WATERMARK]
     ]
     
     frameworks = [

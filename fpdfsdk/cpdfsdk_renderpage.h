@@ -36,4 +36,8 @@ void CPDFSDK_RenderPageWithContext(CPDF_PageRenderContext* pContext,
                                    bool need_to_restore,
                                    CPDFSDK_PauseAdapter* pause);
 
+// [AP-FORM-IMAGE-WATERMARK] 设置全局 ap-form 图片回调
+// pCallback 应为 CPDF_RenderStatus::ImageCallbackIface* 类型
+void CPDFSDK_SetApFormImageCallback(void* pCallback);
+
 #endif  // FPDFSDK_CPDFSDK_RENDERPAGE_H_
