@@ -444,6 +444,10 @@ use_clang_modules = false
             # 打包为 .app bundle
             Logger.info("正在打包为 .app bundle...")
             app_bundle = self.package_app_bundle(build_dir, app_binary)
+            
+            # 更新 .app 目录的时间戳，以反映最新的构建时间
+            Path(app_bundle).touch()
+            
             Logger.success("Mac PDF Viewer 构建成功!")
             Logger.info(f"应用位置: {app_bundle}")
             Logger.info(f"文件大小: {size_mb}MB")

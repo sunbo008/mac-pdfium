@@ -73,3 +73,17 @@
 *.xcodeproj
 *~
 
+
+# clangd 本地缓存
+.clangd-cache/
+
+# 调试和诊断脚本（可选忽略）
+check_clangd.sh
+test_clangd.sh
+verify_jump.sh
+wait_and_check.sh
+watch_clangd.sh
+cleanup_debug_scripts.sh
+
+# 编译数据库备份
+compile_commands.json.backup

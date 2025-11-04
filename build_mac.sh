@@ -17,5 +17,5 @@ python3 tools/mac/build_mac_app.py --auto --build-type Debug
 
 echo ""
 echo "🎉 构建完成!"
-echo "应用位置: out/Debug/mac_pdf_viewer"
+echo "应用位置: out/Debug/PdfWinViewer.app"
 
