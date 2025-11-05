@@ -1,0 +1,33 @@
+# LLDB 自动配置文件模板
+# 使用方法：
+# 1. 复制此文件为 .lldbinit:  cp .lldbinit.template .lldbinit
+# 2. 将下面的 YOUR_PROJECT_PATH 替换为你的实际项目路径
+# 3. 例如：/Volumes/Lzf-MoveDisk/workspace/github/mac-pdfium
+
+# 自动设置源文件路径映射，确保调试时能正确显示源码
+
+# 方案1：映射 . 到项目根目录（最重要）
+settings set target.source-map . YOUR_PROJECT_PATH
+
+# 方案2：映射 ./../.. 到项目根目录
+settings append target.source-map ./../.. YOUR_PROJECT_PATH
+
+# 方案3：映射 ./.. 到项目根目录
+settings append target.source-map ./.. YOUR_PROJECT_PATH
+
+# 方案4：映射相对路径到具体目录
+settings append target.source-map ../../core YOUR_PROJECT_PATH/core
+settings append target.source-map ../../fpdfsdk YOUR_PROJECT_PATH/fpdfsdk
+settings append target.source-map ../../platform YOUR_PROJECT_PATH/platform
+
+# 优化调试体验：默认不显示汇编代码
+settings set stop-disassembly-display never
+
+# 显示源码时的上下文行数
+settings set stop-line-count-before 5
+settings set stop-line-count-after 5
+
+# 确认配置已加载（使用 script 命令输出）
+script print("✅ 源文件路径映射已自动设置")
+script print("📁 项目路径: YOUR_PROJECT_PATH")
+
