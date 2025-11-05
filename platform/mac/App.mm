@@ -737,8 +737,11 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   _firstRenderAfterOpen = true;
   _lastMemMB = GetProcessMemMB();
 #endif
-  [self updateViewSizeToFitPage];
-  [self setNeedsDisplay:YES];
+  // 不在这里调用 updateViewSizeToFitPage，因为 setFrameSize 会触发 drawRect
+  // 移到 openPathAndAdjust 中，在窗口调整前调用
+  // [self updateViewSizeToFitPage];
+  // 移除立即渲染，等待窗口调整完成后统一触发
+  // [self setNeedsDisplay:YES];
   return YES;
 }
 
@@ -925,10 +928,13 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
+  NSLog(@"[DEBUG] 🎨 drawRect 被调用");
+  LOG_DEBUG("🎨 drawRect 被调用");
   [super drawRect:dirtyRect];
   [[NSColor whiteColor] setFill];
   NSRectFill(self.bounds);
   if (!_doc) {
+    NSLog(@"[DEBUG] drawRect: 文档未加载，退出");
     return;
   }
   int pageCount = FPDF_GetPageCount(_doc);
@@ -964,6 +970,10 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   if (bmp) {
     FPDFBitmap_FillRect(bmp, 0, 0, pxW, pxH, 0xFFFFFFFF);
     int flags = FPDF_ANNOT | FPDF_LCD_TEXT;
+    NSLog(@"[DEBUG] ⚠️  即将调用 FPDF_RenderPageBitmap - 页面 %d",
+          _pageIndex + 1);
+    LOG_DEBUG_F("⚠️  即将调用 FPDF_RenderPageBitmap - 页面 %d，尺寸 %dx%d",
+                _pageIndex + 1, pxW, pxH);
     FPDF_RenderPageBitmap(bmp, page, 0, 0, pxW, pxH, 0, flags);
 
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
@@ -3441,14 +3451,22 @@ static TocNode* BuildBookmarksTree(FPDF_DOCUMENT doc) {
 
     // 高亮当前书签
     [self highlightCurrentBookmark];
-    // 根据文档页尺寸调整窗口适配（保持在屏幕可视范围内）
+
+    // 先调整窗口大小（不显示、不动画），避免触发额外的重绘
     NSSize s = [self.view currentPageSizePt];
     CGFloat newW = MIN(MAX(800, s.width + 300), 1600);  // 预留左栏与边距
     CGFloat newH = MIN(MAX(600, s.height + 120), 1200);
     NSRect f = self.window.frame;
     f.size = NSMakeSize(newW, newH);
-    [self.window setFrame:f display:YES animate:YES];
+    [self.window setFrame:f display:NO animate:NO];
     LOG_DEBUG_F("窗口大小调整为：%.0f x %.0f", newW, newH);
+
+    // 然后更新视图尺寸，setFrameSize 会自动触发 drawRect（唯一的渲染）
+    NSLog(@"[DEBUG] 🔄 调用 updateViewSizeToFitPage (会触发 setFrameSize 和 "
+          @"drawRect)");
+    LOG_DEBUG(
+        "🔄 调用 updateViewSizeToFitPage (会触发 setFrameSize 和 drawRect)");
+    [self.view updateViewSizeToFitPage];
 
     // 更新窗口标题
     self.window.title = [NSString
