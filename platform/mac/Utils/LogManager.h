@@ -130,6 +130,19 @@ inline void Log_ShowWindow() {
 void MacLog_ResetFileOnStartup();
 void MacLog_DebugNS(NSString* msg);
 
+// LOG_TAG_NS 宏定义 - 用于带标签的调试日志
+#if PDFWV_ENABLE_LOGGING
+#define LOG_TAG_NS(tag, fmt, ...) \
+  do { \
+    if (MacLog_IsEnabled()) { \
+      NSString* _taggedMsg = [NSString stringWithFormat:@"[%s] " fmt, tag, ##__VA_ARGS__]; \
+      MacLog_DebugNS(_taggedMsg); \
+    } \
+  } while (0)
+#else
+#define LOG_TAG_NS(...) do { } while (0)
+#endif
+
 // 全局变量声明
 extern double _lastMemMB;
 extern double _openStartSec;
