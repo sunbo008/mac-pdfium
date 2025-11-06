@@ -5,10 +5,10 @@
 //
 
 #import "PdfView.h"
-#import "LoadingView.h"
 #include <chrono>
 #include <vector>
 #import "../Utils/LogManager.h"
+#import "LoadingView.h"
 #include "fpdfsdk/cpdfsdk_renderpage.h"
 #include "platform/shared/logger.h"
 #include "platform/shared/pdf_utils.h"
@@ -46,7 +46,7 @@ static inline void LogFPDFLastError(const char* where) {
       break;
   }
   LOG_TAG_NS("PdfWinViewer", "PDFium error at %s: %lu (%@)", where, code,
-        [NSString stringWithUTF8String:msg]);
+             [NSString stringWithUTF8String:msg]);
 }
 
 static inline std::string NSStringToUTF8(NSObject* obj) {
@@ -61,19 +61,21 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   FPDF_DOCUMENT _doc;
   int _pageIndex;
   double _zoom;
+  CGFloat _horizontalInset;
+  NSView* _observedClipView;
   // 选择与交互
   bool _selecting;
   NSPoint _selStart;
   NSPoint _selEnd;
   NSPoint _lastContextPt;  // 最近一次右键菜单触发位置（视图坐标）
   BOOL _lastContextHitImage;  // 最近一次右键是否命中图片
-  
+
   // 异步加载相关
-  BOOL _isLoading;  // 是否正在加载
-  BOOL _shouldCancelLoading;  // 是否应该取消加载
-  LoadingView* _loadingView;  // 加载视图
-  NSString* _loadingPath;  // 正在加载的文件路径
-  NSString* _currentPath;  // 当前打开的文件路径
+  BOOL _isLoading;                 // 是否正在加载
+  BOOL _shouldCancelLoading;       // 是否应该取消加载
+  LoadingView* _loadingView;       // 加载视图
+  NSString* _loadingPath;          // 正在加载的文件路径
+  NSString* _currentPath;          // 当前打开的文件路径
   dispatch_queue_t _loadingQueue;  // 加载队列
 }
 
@@ -88,7 +90,11 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
   // Convert view pixels to page points
   // The view shows the page at _zoom scale
-  double px = viewPt.x / _zoom;
+  double adjX = viewPt.x - _horizontalInset;
+  if (adjX < 0) {
+    adjX = 0;
+  }
+  double px = adjX / _zoom;
   double py = viewPt.y / _zoom;
 
   // Note: PdfHitImageAt will handle the Y-axis flip from top-left to
@@ -98,7 +104,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
 - (NSPoint)toViewFromPagePx:(NSPoint)pagePt {
   // Convert page coordinates back to view coordinates for debugging
-  double vx = pagePt.x * _zoom;
+  double vx = pagePt.x * _zoom + _horizontalInset;
   double vy = pagePt.y * _zoom;
   return NSMakePoint(vx, vy);
 }
@@ -136,6 +142,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     }
     int oldIndex = _pageIndex;
     _pageIndex = index;
+    [self updateViewSizeToFitPage];
     [self setNeedsDisplay:YES];
     // 如果页面真的发生了变化，通知delegate
     if (oldIndex != _pageIndex &&
@@ -150,6 +157,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     _doc = nullptr;
     _pageIndex = 0;
     _zoom = 1.0;
+    _horizontalInset = 0.0;
+    _observedClipView = nil;
     _selecting = false;
     _isLoading = NO;
     _shouldCancelLoading = NO;
@@ -158,6 +167,96 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     [self.window setAcceptsMouseMovedEvents:YES];
   }
   return self;
+}
+
+- (void)dealloc {
+  [self stopObservingClipView];
+}
+
+- (void)viewWillMoveToSuperview:(NSView*)newSuperview {
+  [self stopObservingClipView];
+  [super viewWillMoveToSuperview:newSuperview];
+}
+
+- (void)viewDidMoveToSuperview {
+  [super viewDidMoveToSuperview];
+  [self startObservingClipView];
+  [self updateViewSizeToFitPage];
+}
+
+- (void)viewDidMoveToWindow {
+  [super viewDidMoveToWindow];
+  [self startObservingClipView];
+  [self updateViewSizeToFitPage];
+}
+
+- (void)startObservingClipView {
+  NSScrollView* scrollView = self.enclosingScrollView;
+  if (!scrollView) {
+    return;
+  }
+  NSView* clipView = scrollView.contentView;
+  if (_observedClipView == clipView) {
+    return;
+  }
+
+  [self stopObservingClipView];
+
+  _observedClipView = clipView;
+  [_observedClipView setPostsFrameChangedNotifications:YES];
+  [_observedClipView setPostsBoundsChangedNotifications:YES];
+
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(clipViewGeometryDidChange:)
+             name:NSViewFrameDidChangeNotification
+           object:_observedClipView];
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(clipViewGeometryDidChange:)
+             name:NSViewBoundsDidChangeNotification
+           object:_observedClipView];
+}
+
+- (void)stopObservingClipView {
+  if (!_observedClipView) {
+    return;
+  }
+  [[NSNotificationCenter defaultCenter]
+      removeObserver:self
+                name:NSViewFrameDidChangeNotification
+              object:_observedClipView];
+  [[NSNotificationCenter defaultCenter]
+      removeObserver:self
+                name:NSViewBoundsDidChangeNotification
+              object:_observedClipView];
+  _observedClipView = nil;
+}
+
+- (void)clipViewGeometryDidChange:(NSNotification*)notification {
+  (void)notification;
+  [self updateViewSizeToFitPage];
+  [self setNeedsDisplay:YES];
+}
+
+- (CGFloat)currentHorizontalInsetForDestWidth:(double)destWidth {
+  CGFloat width = NSWidth(self.visibleRect);
+  if (width <= 0 && self.enclosingScrollView) {
+    width = NSWidth(self.enclosingScrollView.contentView.bounds);
+  }
+  if (width <= 0 && self.superview) {
+    width = NSWidth(self.superview.bounds);
+  }
+  if (width <= destWidth || width <= 0) {
+    return 0.0f;
+  }
+  double scale = self.window ? self.window.backingScaleFactor : 1.0;
+  if (scale <= 0.0) {
+    scale = 1.0;
+  }
+  double inset = (width - destWidth) / 2.0;
+  inset = llround(inset * scale) / scale;
+  return (CGFloat)inset;
 }
 
 - (BOOL)isFlipped {
@@ -203,8 +302,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   if (showLoading) {
     if (!_loadingView) {
       _loadingView = [[LoadingView alloc] initWithFrame:self.bounds];
-      _loadingView.autoresizingMask =
-          NSViewWidthSizable | NSViewHeightSizable;
+      _loadingView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
       __weak PdfView* weakSelf = self;
       _loadingView.onCancel = ^{
         [weakSelf cancelLoading];
@@ -248,7 +346,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                path:path
                           startTime:startTime
                       loadStartTime:loadStartTime
-                       showLoading:showLoading
+                        showLoading:showLoading
                           cancelled:YES];
     return;
   }
@@ -265,7 +363,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                path:path
                           startTime:startTime
                       loadStartTime:loadStartTime
-                       showLoading:showLoading
+                        showLoading:showLoading
                           cancelled:NO];
     return;
   }
@@ -289,7 +387,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                  path:path
                             startTime:startTime
                         loadStartTime:loadStartTime
-                         showLoading:showLoading
+                          showLoading:showLoading
                             cancelled:YES];
       return;
     }
@@ -309,16 +407,18 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                path:path
                           startTime:startTime
                       loadStartTime:loadStartTime
-                       showLoading:showLoading
+                        showLoading:showLoading
                           cancelled:NO];
   });
 }
 
 - (void)finishLoadingWithDocument:(FPDF_DOCUMENT)doc
                              path:(NSString*)path
-                        startTime:(std::chrono::steady_clock::time_point)startTime
-                    loadStartTime:(std::chrono::steady_clock::time_point)loadStartTime
-                     showLoading:(BOOL)showLoading
+                        startTime:
+                            (std::chrono::steady_clock::time_point)startTime
+                    loadStartTime:
+                        (std::chrono::steady_clock::time_point)loadStartTime
+                      showLoading:(BOOL)showLoading
                         cancelled:(BOOL)cancelled {
   // 隐藏加载视图
   if (showLoading && _loadingView) {
@@ -331,23 +431,23 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   _loadingPath = nil;
 
   // 通知delegate
-  if ([self.delegate
-          respondsToSelector:@selector(pdfView:didFinishLoadingDocument:error:)]) {
+  if ([self.delegate respondsToSelector:@selector(pdfView:
+                                            didFinishLoadingDocument:error:)]) {
     NSError* error = nil;
     if (!doc && !cancelled) {
-      error = [NSError errorWithDomain:@"PdfViewErrorDomain"
-                                  code:1
-                              userInfo:@{
-                                NSLocalizedDescriptionKey : @"无法加载PDF文档"
-                              }];
+      error = [NSError
+          errorWithDomain:@"PdfViewErrorDomain"
+                     code:1
+                 userInfo:@{NSLocalizedDescriptionKey : @"无法加载PDF文档"}];
     } else if (cancelled) {
-      error = [NSError errorWithDomain:@"PdfViewErrorDomain"
-                                  code:2
-                              userInfo:@{
-                                NSLocalizedDescriptionKey : @"用户取消加载"
-                              }];
+      error = [NSError
+          errorWithDomain:@"PdfViewErrorDomain"
+                     code:2
+                 userInfo:@{NSLocalizedDescriptionKey : @"用户取消加载"}];
     }
-    [self.delegate pdfView:self didFinishLoadingDocument:(doc != nullptr) error:error];
+    [self.delegate pdfView:self
+        didFinishLoadingDocument:(doc != nullptr)
+                           error:error];
   }
 }
 
@@ -371,16 +471,39 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 - (void)updateViewSizeToFitPage {
   NSSize s = [self currentPageSizePt];
   if (s.width <= 0 || s.height <= 0) {
+    _horizontalInset = 0.0;
     return;
   }
-  [self setFrameSize:NSMakeSize((CGFloat)(s.width * _zoom),
-                                (CGFloat)(s.height * _zoom))];
+  double destWidth = s.width * _zoom;
+  double destHeight = s.height * _zoom;
+
+  CGFloat visibleWidth = NSWidth(self.visibleRect);
+  if (visibleWidth <= 0 && self.enclosingScrollView) {
+    visibleWidth = NSWidth(self.enclosingScrollView.contentView.bounds);
+  }
+  if (visibleWidth <= 0 && self.superview) {
+    visibleWidth = NSWidth(self.superview.bounds);
+  }
+
+  double newWidth = destWidth;
+  if (visibleWidth > 0) {
+    newWidth = std::max(destWidth, static_cast<double>(visibleWidth));
+  }
+
+  [self setFrameSize:NSMakeSize((CGFloat)newWidth, (CGFloat)destHeight)];
+
+  _horizontalInset = [self currentHorizontalInsetForDestWidth:destWidth];
+}
+
+- (void)resizeWithOldSuperviewSize:(NSSize)oldSize {
+  [super resizeWithOldSuperviewSize:oldSize];
+  [self updateViewSizeToFitPage];
 }
 
 - (void)keyDown:(NSEvent*)event {
   NSString* chars = [event charactersIgnoringModifiers];
   unichar c = chars.length ? [chars characterAtIndex:0] : 0;
-  
+
   // ESC 键取消加载
   if (c == 0x1B) {  // ESC key
     if (_isLoading) {
@@ -388,11 +511,11 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       return;
     }
   }
-  
+
   if (!_doc) {
     return;
   }
-  
+
   NSEventModifierFlags mods =
       event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
   if ((mods & NSEventModifierFlagCommand) != 0) {
@@ -453,6 +576,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     default:
       break;
   }
+  [self updateViewSizeToFitPage];
   [self setNeedsDisplay:YES];
   // 如果页面发生了变化，通知delegate
   if (oldIndex != _pageIndex &&
@@ -489,6 +613,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   if (_doc) {
     int oldIndex = _pageIndex;
     _pageIndex = 0;
+    [self updateViewSizeToFitPage];
     [self setNeedsDisplay:YES];
     if (oldIndex != _pageIndex &&
         [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
@@ -502,6 +627,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     if (pc > 0) {
       int oldIndex = _pageIndex;
       _pageIndex = pc - 1;
+      [self updateViewSizeToFitPage];
       [self setNeedsDisplay:YES];
       if (oldIndex != _pageIndex &&
           [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
@@ -515,6 +641,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     if (_pageIndex > 0) {
       int oldIndex = _pageIndex;
       _pageIndex--;
+      [self updateViewSizeToFitPage];
       [self setNeedsDisplay:YES];
       if (oldIndex != _pageIndex &&
           [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
@@ -529,6 +656,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     if (pc > 0 && _pageIndex < pc - 1) {
       int oldIndex = _pageIndex;
       _pageIndex++;
+      [self updateViewSizeToFitPage];
       [self setNeedsDisplay:YES];
       if (oldIndex != _pageIndex &&
           [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
@@ -620,7 +748,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     // 插值关闭，保证位图锐利
     CGContextSetInterpolationQuality(ctx, kCGInterpolationNone);
     // 视图是 flipped（y 向下），需对图片做一次上下翻转
-    CGContextTranslateCTM(ctx, 0, destHpt);
+    _horizontalInset = [self currentHorizontalInsetForDestWidth:destWpt];
+    CGContextTranslateCTM(ctx, _horizontalInset, destHpt);
     CGContextScaleCTM(ctx, 1.0, -1.0);
     // 绘制统一的白色背景（随缩放变化），避免缩放后背景与内容不同步
     CGContextSetFillColorWithColor(ctx, [NSColor whiteColor].CGColor);
@@ -893,7 +1022,10 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   // 视图坐标 -> 页面像素坐标（与渲染一致）
   int dpi = 72 * (int)ceil([self.window backingScaleFactor] ?: 2.0);
   auto toPagePx = ^(NSPoint p) {
-    double x = p.x * (dpi / 72.0) / _zoom;
+    double x = (p.x - _horizontalInset) * (dpi / 72.0) / _zoom;
+    if (x < 0.0) {
+      x = 0.0;
+    }
     double yTopDown = p.y * (dpi / 72.0) / _zoom;
     double y = std::max(0.0, hpt - yTopDown);
     return NSMakePoint(x, y);
@@ -933,7 +1065,10 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   double wpt = 0, hpt = 0;
   FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
   int dpi = 72 * (int)ceil([self.window backingScaleFactor] ?: 2.0);
-  double px = viewPt.x * (dpi / 72.0) / _zoom;
+  double px = (viewPt.x - _horizontalInset) * (dpi / 72.0) / _zoom;
+  if (px < 0.0) {
+    px = 0.0;
+  }
   double py = std::max(0.0, hpt - viewPt.y * (dpi / 72.0) / _zoom);
   FPDF_LINK link = FPDFLink_GetLinkAtPoint(page, px, py);
   if (link) {
@@ -948,6 +1083,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       int pageIndex = FPDFDest_GetDestPageIndex(_doc, dest);
       if (pageIndex >= 0) {
         _pageIndex = pageIndex;
+        [self updateViewSizeToFitPage];
         [self setNeedsDisplay:YES];
       }
     }
@@ -978,12 +1114,14 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     } else if (v > pc) {
       v = pc;  // 大于最大值时使用最大值
       LOG_TAG_NS("PageNavigation", "输入页码超过最大值%ld，调整为最大值: %ld",
-            (long)pc, (long)v);
+                 (long)pc, (long)v);
     }
 
     int oldIndex = _pageIndex;
     _pageIndex = (int)v - 1;  // 转换为0基索引
-    LOG_TAG_NS("PageNavigation", "设置页码为: %ld (索引: %d)", (long)v, _pageIndex);
+    LOG_TAG_NS("PageNavigation", "设置页码为: %ld (索引: %d)", (long)v,
+               _pageIndex);
+    [self updateViewSizeToFitPage];
     [self setNeedsDisplay:YES];
 
     if (oldIndex != _pageIndex &&
@@ -994,8 +1132,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 }
 
 - (BOOL)exportCurrentPagePNG {
-  LOG_TAG_NS("PdfWinViewer", "[exportPage] doc=%@ page=%d", _doc ? @"YES" : @"NO",
-        _pageIndex);
+  LOG_TAG_NS("PdfWinViewer", "[exportPage] doc=%@ page=%d",
+             _doc ? @"YES" : @"NO", _pageIndex);
   if (!_doc) {
     return NO;
   }
@@ -1075,9 +1213,10 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   double px = pageXY.x, py = pageXY.y;
   double wpt = 0, hpt = 0;
   FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
-  LOG_TAG_NS("PdfWinViewer", "[saveImage] use pt=(%.1f,%.1f) => pageXY=(%.1f,%.1f) "
-        @"pageWH=(%.1f,%.1f)",
-        pt.x, pt.y, px, py, wpt, hpt);
+  LOG_TAG_NS("PdfWinViewer",
+             "[saveImage] use pt=(%.1f,%.1f) => pageXY=(%.1f,%.1f) "
+            @"pageWH=(%.1f,%.1f)",
+             pt.x, pt.y, px, py, wpt, hpt);
   FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
   if (!page) {
     return;
@@ -1247,7 +1386,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   FPDF_ClosePage(page);
 
   LOG_TAG_NS("PdfWinViewer", "[saveImage] save completed: %@, path: %@",
-        saveSuccess ? @"SUCCESS" : @"FAILED", url.path);
+             saveSuccess ? @"SUCCESS" : @"FAILED", url.path);
   MacLog_DebugNS(
       [NSString stringWithFormat:@"[saveImage] final result: %@",
                                  saveSuccess ? @"SUCCESS" : @"FAILED"]);
@@ -1270,7 +1409,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   // 遍历页面上的所有对象
   int totalObjs = FPDFPage_CountObjects(page);
   LOG_TAG_NS("PdfView", "检测点击位置 (%.1f, %.1f)，页面共有 %d 个对象", px, py,
-        totalObjs);
+             totalObjs);
 
   for (int i = 0; i < totalObjs; i++) {
     FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
@@ -1284,8 +1423,9 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       // 检查点击是否在对象边界内
       if (px >= left && px <= right && py >= bottom && py <= top) {
         int objType = FPDFPageObj_GetType(obj);
-        LOG_TAG_NS("PdfView", "点击命中对象 %d，类型: %d，边界: (%.1f,%.1f,%.1f,%.1f)",
-            i, objType, left, bottom, right, top);
+        LOG_TAG_NS("PdfView",
+                   "点击命中对象 %d，类型: %d，边界: (%.1f,%.1f,%.1f,%.1f)", i,
+                   objType, left, bottom, right, top);
 
         // 通知AppDelegate跳转到检查器中的对应对象
         if (self.delegate && [self.delegate respondsToSelector:@selector
@@ -1332,7 +1472,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   FPDF_WIDESTRING wideString = (FPDF_WIDESTRING)utf16Data.bytes;
 
   int startIdx = startIndex ? [startIndex intValue] : 0;
-  LOG_TAG_NS("PdfView", "开始查找文本: '%@'，起始索引: %d", searchText, startIdx);
+  LOG_TAG_NS("PdfView", "开始查找文本: '%@'，起始索引: %d", searchText,
+             startIdx);
 
   // 开始搜索
   FPDF_SCHHANDLE searchHandle =
@@ -1350,14 +1491,14 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     int resultIndex = FPDFText_GetSchResultIndex(searchHandle);
     int resultCount = FPDFText_GetSchCount(searchHandle);
     LOG_TAG_NS("PdfView", "找到匹配文本，位置: %d，长度: %d", resultIndex,
-          resultCount);
+               resultCount);
 
     // 获取匹配文本的边界框以便高亮显示
     double left, top, right, bottom;
     if (FPDFText_GetCharBox(textPage, resultIndex, &left, &bottom, &right,
                             &top)) {
-      LOG_TAG_NS("PdfView", "匹配文本边界: (%.1f, %.1f, %.1f, %.1f)", left, bottom,
-            right, top);
+      LOG_TAG_NS("PdfView", "匹配文本边界: (%.1f, %.1f, %.1f, %.1f)", left,
+                 bottom, right, top);
 
       // 将PDF坐标转换为视图坐标并滚动到可见区域
       NSPoint viewPoint = [self toViewFromPagePx:NSMakePoint(left, top)];
