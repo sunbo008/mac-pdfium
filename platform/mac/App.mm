@@ -69,8 +69,8 @@ static inline void LogFPDFLastError(const char* where) {
     default:
       break;
   }
-  NSLog(@"[PdfWinViewer] PDFium error at %s: %lu (%@)", where, code,
-        [NSString stringWithUTF8String:msg]);
+  LOG_TAG_NS("PdfWinViewer", "PDFium error at %s: %lu (%@)", where, code,
+             [NSString stringWithUTF8String:msg]);
 }
 
 static inline std::string NSStringToUTF8(NSObject* obj) {
@@ -207,9 +207,9 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   [self.window setBackgroundColor:[NSColor windowBackgroundColor]];
   [self.window setIsVisible:YES];
   [self.window setAlphaValue:1.0];
-  NSLog(@"[Window] 窗口创建完成，frame: %@, visible: %@",
-        NSStringFromRect(self.window.frame),
-        self.window.isVisible ? @"YES" : @"NO");
+  LOG_TAG_NS("Window", "窗口创建完成，frame: %@, visible: %@",
+             NSStringFromRect(self.window.frame),
+             self.window.isVisible ? @"YES" : @"NO");
 
   // 创建主容器视图，包含主内容区域和底部状态栏(支持拖拽打开PDF)
   DragDropView* containerView =
@@ -238,8 +238,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   self.statusBar.frame = NSMakeRect(0, 0, rect.size.width, 30);
   self.statusBar.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
   [containerView addSubview:self.statusBar];
-  NSLog(@"[StatusBar] 状态栏已添加到容器视图，frame: %@",
-        NSStringFromRect(self.statusBar.frame));
+  LOG_TAG_NS("StatusBar", "状态栏已添加到容器视图，frame: %@",
+             NSStringFromRect(self.statusBar.frame));
 
   // 初始化书签可见性状态（默认展开）
   self.bookmarkVisible = YES;
@@ -289,8 +289,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   NSRect outlineFrame =
       NSMakeRect(0, 0, outlineWidth,
                  self.leftPanel.bounds.size.height - kControlBarHeight);
-  NSLog(@"[ScrollDebug] outline宽度: %.1f (预留滚动条空间: %.1f)", outlineWidth,
-        kScrollBarWidth);
+  LOG_TAG_NS("ScrollDebug", "outline宽度: %.1f (预留滚动条空间: %.1f)",
+             outlineWidth, kScrollBarWidth);
 
   self.outline = [[NSOutlineView alloc] initWithFrame:outlineFrame];
   NSTableColumn* col = [[NSTableColumn alloc] initWithIdentifier:@"toc"];
@@ -298,7 +298,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   col.width = outlineWidth - 20;  // 为滚动条和边距预留空间
   col.minWidth = 100;
   col.maxWidth = outlineWidth - 10;
-  NSLog(@"[ScrollDebug] 表格列宽度: %.1f", col.width);
+  LOG_TAG_NS("ScrollDebug", "表格列宽度: %.1f", col.width);
   [self.outline addTableColumn:col];
   self.outline.outlineTableColumn = col;
   self.outline.headerView = nil;
@@ -316,20 +316,20 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   self.outline.delegate = self.bookmarkDelegate;
   self.outline.dataSource = self.bookmarkDelegate;
 
-  NSLog(@"[ScrollDebug] ========== 初始化书签滚动视图 ==========");
-  NSLog(@"[ScrollDebug] outlineFrame: %@", NSStringFromRect(outlineFrame));
+  LOG_TAG_NS("ScrollDebug", "========== 初始化书签滚动视图 ==========");
+  LOG_TAG_NS("ScrollDebug", "outlineFrame: %@", NSStringFromRect(outlineFrame));
 
   // 滚动视图应该占据整个展开宽度，为滚动条提供空间
   NSRect scrollFrame =
       NSMakeRect(0, 0, kBookmarkExpandedWidth,
                  self.leftPanel.bounds.size.height - kControlBarHeight);
-  NSLog(@"[ScrollDebug] scrollFrame: %@", NSStringFromRect(scrollFrame));
+  LOG_TAG_NS("ScrollDebug", "scrollFrame: %@", NSStringFromRect(scrollFrame));
 
   self.outlineScroll = [[NSScrollView alloc] initWithFrame:scrollFrame];
   self.outlineScroll.documentView = self.outline;
 
-  NSLog(@"[ScrollDebug] 滚动视图创建完成，frame: %@",
-        NSStringFromRect(self.outlineScroll.frame));
+  LOG_TAG_NS("ScrollDebug", "滚动视图创建完成，frame: %@",
+             NSStringFromRect(self.outlineScroll.frame));
 
   // 垂直滚动条配置 - 确保始终可见且功能正常
   self.outlineScroll.hasVerticalScroller = YES;
@@ -338,13 +338,15 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   self.outlineScroll.autohidesScrollers =
       NO;  // 始终显示滚动条，提供更好的用户反馈
 
-  NSLog(@"[ScrollDebug] 基本滚动条配置完成 - hasVertical: YES, hasHorizontal: "
-        @"NO, autohides: NO");
+  LOG_TAG_NS("ScrollDebug",
+             "基本滚动条配置完成 - hasVertical: YES, hasHorizontal: "
+            @"NO, autohides: NO");
 
   // 为了调试，暂时使用传统滚动条样式，更容易看到
   self.outlineScroll.scrollerStyle =
       NSScrollerStyleLegacy;  // 传统滚动条，更明显可见
-  NSLog(@"[ScrollDebug] 使用传统滚动条样式: NSScrollerStyleLegacy (调试模式)");
+  LOG_TAG_NS("ScrollDebug",
+             "使用传统滚动条样式: NSScrollerStyleLegacy (调试模式)");
 
   // 滚动行为优化
   self.outlineScroll.verticalScrollElasticity =
@@ -355,34 +357,34 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   self.outlineScroll.autoresizingMask =
       NSViewWidthSizable | NSViewHeightSizable;
 
-  NSLog(@"[ScrollDebug] 滚动行为配置完成");
+  LOG_TAG_NS("ScrollDebug", "滚动行为配置完成");
 
   // 检查初始滚动条状态
   NSScroller* initialVScroller = self.outlineScroll.verticalScroller;
   if (initialVScroller) {
-    NSLog(@"[ScrollDebug] ✅ 初始垂直滚动条已创建");
-    NSLog(@"[ScrollDebug] 初始滚动条 frame: %@",
-          NSStringFromRect(initialVScroller.frame));
-    NSLog(@"[ScrollDebug] 初始滚动条 hidden: %@",
-          initialVScroller.hidden ? @"YES" : @"NO");
-    NSLog(@"[ScrollDebug] 初始滚动条 enabled: %@",
-          initialVScroller.enabled ? @"YES" : @"NO");
+    LOG_TAG_NS("ScrollDebug", "✅ 初始垂直滚动条已创建");
+    LOG_TAG_NS("ScrollDebug", "初始滚动条 frame: %@",
+               NSStringFromRect(initialVScroller.frame));
+    LOG_TAG_NS("ScrollDebug", "初始滚动条 hidden: %@",
+               initialVScroller.hidden ? @"YES" : @"NO");
+    LOG_TAG_NS("ScrollDebug", "初始滚动条 enabled: %@",
+               initialVScroller.enabled ? @"YES" : @"NO");
 
     // 滚动条宽度和位置优化
     initialVScroller.controlSize = NSControlSizeRegular;
-    NSLog(@"[ScrollDebug] 滚动条控件大小设置为 Regular");
+    LOG_TAG_NS("ScrollDebug", "滚动条控件大小设置为 Regular");
   } else {
-    NSLog(@"[ScrollDebug] ❌ 初始垂直滚动条未创建！");
+    LOG_TAG_NS("ScrollDebug", "❌ 初始垂直滚动条未创建！");
   }
 
   // 确保滚动视图内容正确更新
   [self.outlineScroll setNeedsDisplay:YES];
 
   self.outlineScroll.hidden = NO;  // 默认显示
-  NSLog(@"[ScrollDebug] 滚动视图设置为显示状态");
+  LOG_TAG_NS("ScrollDebug", "滚动视图设置为显示状态");
 
   [self.leftPanel addSubview:self.outlineScroll];
-  NSLog(@"[ScrollDebug] 滚动视图已添加到左侧面板");
+  LOG_TAG_NS("ScrollDebug", "滚动视图已添加到左侧面板");
 
   // 更新bookmarkDelegate和bookmarkPanelController的outlineScroll引用
   self.bookmarkDelegate.outlineScroll = self.outlineScroll;
@@ -390,18 +392,18 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   self.bookmarkPanelController.outline = self.outline;
 
   // 检查视图层次结构
-  NSLog(@"[ScrollDebug] leftPanel frame: %@",
-        NSStringFromRect(self.leftPanel.frame));
-  NSLog(@"[ScrollDebug] leftPanel subviews count: %lu",
-        (unsigned long)self.leftPanel.subviews.count);
+  LOG_TAG_NS("ScrollDebug", "leftPanel frame: %@",
+             NSStringFromRect(self.leftPanel.frame));
+  LOG_TAG_NS("ScrollDebug", "leftPanel subviews count: %lu",
+             (unsigned long)self.leftPanel.subviews.count);
   for (NSUInteger i = 0; i < self.leftPanel.subviews.count; i++) {
     NSView* subview = self.leftPanel.subviews[i];
-    NSLog(@"[ScrollDebug] leftPanel subview[%lu]: %@ frame: %@",
-          (unsigned long)i, NSStringFromClass([subview class]),
-          NSStringFromRect(subview.frame));
+    LOG_TAG_NS("ScrollDebug", "leftPanel subview[%lu]: %@ frame: %@",
+               (unsigned long)i, NSStringFromClass([subview class]),
+               NSStringFromRect(subview.frame));
   }
 
-  NSLog(@"[ScrollDebug] ========== 书签滚动视图初始化完成 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== 书签滚动视图初始化完成 ==========");
 
   // 5. 检查器面板控制器
   self.inspectorPanelController = [[InspectorPanelController alloc] init];
@@ -511,9 +513,9 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
   // 设置容器视图为窗口的内容视图
   self.window.contentView = containerView;
-  NSLog(@"[StatusBar] 容器视图设置为窗口内容视图，容器frame: %@",
-        NSStringFromRect(containerView.frame));
-  NSLog(@"[StatusBar] 窗口contentView: %@", self.window.contentView);
+  LOG_TAG_NS("StatusBar", "容器视图设置为窗口内容视图，容器frame: %@",
+             NSStringFromRect(containerView.frame));
+  LOG_TAG_NS("StatusBar", "窗口contentView: %@", self.window.contentView);
   [self.window setTitle:@"PdfWinViewer (macOS)"];
 
   // 确保窗口可见并显示在前台
@@ -523,7 +525,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   [self.window makeKeyAndOrderFront:nil];
   [self.window orderFrontRegardless];
 
-  NSLog(@"[Window] 窗口已显示，frame: %@", NSStringFromRect(self.window.frame));
+  LOG_TAG_NS("Window", "窗口已显示，frame: %@",
+             NSStringFromRect(self.window.frame));
 
   // 设置窗口关闭时退出应用
   self.window.delegate = self;
@@ -566,16 +569,17 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   self.recentMenu = [NSMenu new];
   [self.recentMenuItem setSubmenu:self.recentMenu];
   [fileMenu addItem:self.recentMenuItem];
-  NSLog(
-      @"[PdfWinViewer] File menu constructed. recentMenuItem=%@ recentMenu=%@",
-      self.recentMenuItem, self.recentMenu);
+  LOG_TAG_NS("PdfWinViewer",
+             "File menu constructed. recentMenuItem=%@ recentMenu=%@",
+             self.recentMenuItem, self.recentMenu);
   // 调试：枚举文件菜单条目
   for (NSInteger i = 0; i < fileMenu.numberOfItems; ++i) {
     NSMenuItem* mi = [fileMenu itemAtIndex:i];
-    NSLog(@"[PdfWinViewer] File menu item[%ld]: title='%@' hasSubmenu=%@ "
-          @"action=%@",
-          (long)i, mi.title, (mi.submenu ? @"YES" : @"NO"),
-          NSStringFromSelector(mi.action));
+    LOG_TAG_NS("PdfWinViewer",
+               "File menu item[%ld]: title='%@' hasSubmenu=%@ "
+              @"action=%@",
+               (long)i, mi.title, (mi.submenu ? @"YES" : @"NO"),
+               NSStringFromSelector(mi.action));
   }
   [fileItem setSubmenu:fileMenu];
   [mainMenu addItem:fileItem];
@@ -662,7 +666,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
   // 由于默认展开书签，需要确保布局正确
   dispatch_async(dispatch_get_main_queue(), ^{
-    NSLog(@"[ScrollDebug] 初始化后更新展开状态布局...");
+    LOG_TAG_NS("ScrollDebug", "初始化后更新展开状态布局...");
     [self ensureLeftPanelSize];
     [self updateExpandedControlBarLayout];
     [self forceTraditionalScrollBar];
@@ -716,7 +720,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
   // 处理cmd+f查找功能
   if (c == 'f' && (mods & NSEventModifierFlagCommand)) {
-    NSLog(@"[GlobalKey] 拦截到Cmd+F，显示查找面板");
+    LOG_TAG_NS("GlobalKey", "拦截到Cmd+F，显示查找面板");
     [self showFindPanel];
     return nil;  // 消费事件
   }
@@ -726,22 +730,23 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
   if (c == NSPageUpFunctionKey || c == NSPageDownFunctionKey) {
     isPageNavigationKey = YES;
-    NSLog(@"[GlobalKey] 拦截到%@键",
-          c == NSPageUpFunctionKey ? @"PageUp" : @"PageDown");
+    LOG_TAG_NS("GlobalKey", "拦截到%@键",
+               c == NSPageUpFunctionKey ? @"PageUp" : @"PageDown");
   } else if (c == NSHomeFunctionKey || c == NSEndFunctionKey) {
     isPageNavigationKey = YES;
-    NSLog(@"[GlobalKey] 拦截到%@键", c == NSHomeFunctionKey ? @"Home" : @"End");
+    LOG_TAG_NS("GlobalKey", "拦截到%@键",
+               c == NSHomeFunctionKey ? @"Home" : @"End");
   } else if (c == NSUpArrowFunctionKey || c == NSDownArrowFunctionKey) {
     // 只有在没有修饰键时才拦截箭头键（避免影响其他功能）
     if (mods == 0) {
       isPageNavigationKey = YES;
-      NSLog(@"[GlobalKey] 拦截到%@箭头键",
-            c == NSUpArrowFunctionKey ? @"上" : @"下");
+      LOG_TAG_NS("GlobalKey", "拦截到%@箭头键",
+                 c == NSUpArrowFunctionKey ? @"上" : @"下");
     }
   }
 
   if (isPageNavigationKey) {
-    NSLog(@"[GlobalKey] 路由翻页键到PDF视图");
+    LOG_TAG_NS("GlobalKey", "路由翻页键到PDF视图");
 
     // 直接调用PDF视图的键盘处理
     if (self.view && [self.view respondsToSelector:@selector(keyDown:)]) {
@@ -852,8 +857,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     [self.inspectorTextView setSelectedRange:foundRange];
     [self.inspectorTextView showFindIndicatorForRange:foundRange];
 
-    NSLog(@"[Find] 在检查器中找到文本: %@ at 位置: %lu", searchTerm,
-          foundRange.location);
+    LOG_TAG_NS("Find", "在检查器中找到文本: %@ at 位置: %lu", searchTerm,
+               foundRange.location);
   } else if (self.currentSearchIndex > 0) {
     // 没找到，尝试从头开始搜索
     foundRange =
@@ -865,8 +870,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       [self.inspectorTextView scrollRangeToVisible:foundRange];
       [self.inspectorTextView setSelectedRange:foundRange];
       [self.inspectorTextView showFindIndicatorForRange:foundRange];
-      NSLog(@"[Find] 在检查器中找到文本（从头开始）: %@ at 位置: %lu",
-            searchTerm, foundRange.location);
+      LOG_TAG_NS("Find", "在检查器中找到文本（从头开始）: %@ at 位置: %lu",
+                 searchTerm, foundRange.location);
     } else {
       // 真的没找到
       [self showNotFoundAlert:searchTerm];
@@ -885,7 +890,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       [NSString stringWithFormat:@"在检查器窗口中未找到文本: %@", searchTerm];
   [alert addButtonWithTitle:@"确定"];
   [alert runModal];
-  NSLog(@"[Find] 在检查器中未找到文本: %@", searchTerm);
+  LOG_TAG_NS("Find", "在检查器中未找到文本: %@", searchTerm);
 }
 
 // 为对象引用着色的辅助方法
@@ -910,8 +915,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                            options:0
                              error:&error];
   if (error) {
-    NSLog(@"[Inspector] 对象引用正则表达式错误: %@",
-          error.localizedDescription);
+    LOG_TAG_NS("Inspector", "对象引用正则表达式错误: %@",
+               error.localizedDescription);
     return result;
   }
 
@@ -930,7 +935,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
 // PDF视图对象点击处理
 - (void)pdfViewDidClickObject:(NSValue*)objectValue atIndex:(NSNumber*)index {
-  NSLog(@"[Inspector] PDF视图点击了对象，索引: %@", index);
+  LOG_TAG_NS("Inspector", "PDF视图点击了对象，索引: %@", index);
 
   // 从NSValue中提取FPDF_PAGEOBJECT
   FPDF_PAGEOBJECT object = (FPDF_PAGEOBJECT)[objectValue pointerValue];
@@ -940,7 +945,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   [self updateInspectorContent];
 
   // TODO: 实现更精确的对象映射和跳转
-  NSLog(@"[Inspector] 已刷新检查器内容以响应PDF对象点击");
+  LOG_TAG_NS("Inspector", "已刷新检查器内容以响应PDF对象点击");
 }
 
 #pragma mark - 桥接方法（转发到Controller）
@@ -1031,7 +1036,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   [self.outline reloadData];
   // 默认折叠所有顶层书签
   [self.outline collapseItem:nil collapseChildren:YES];
-  NSLog(@"[BookmarkControl] 书签重建完成，默认折叠所有顶层书签");
+  LOG_TAG_NS("BookmarkControl", "书签重建完成，默认折叠所有顶层书签");
 
   // 确保滚动条正确更新
   [self updateBookmarkScrollView];
@@ -1039,22 +1044,23 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 }
 
 - (void)updateBookmarkScrollView {
-  NSLog(@"[ScrollDebug] ========== updateBookmarkScrollView 开始 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== updateBookmarkScrollView 开始
+==========");
 
   // 强制更新滚动视图的内容大小和滚动条
   if (self.outlineScroll && !self.outlineScroll.hidden) {
-    NSLog(@"[ScrollDebug] 滚动视图存在且未隐藏");
+    LOG_TAG_NS("ScrollDebug", "滚动视图存在且未隐藏");
 
     // 打印滚动视图基本信息
-    NSLog(@"[ScrollDebug] outlineScroll frame: %@",
+    LOG_TAG_NS("ScrollDebug", "outlineScroll frame: %@",
           NSStringFromRect(self.outlineScroll.frame));
-    NSLog(@"[ScrollDebug] outlineScroll bounds: %@",
+    LOG_TAG_NS("ScrollDebug", "outlineScroll bounds: %@",
           NSStringFromRect(self.outlineScroll.bounds));
-    NSLog(@"[ScrollDebug] outlineScroll superview: %@",
+    LOG_TAG_NS("ScrollDebug", "outlineScroll superview: %@",
           self.outlineScroll.superview);
-    NSLog(@"[ScrollDebug] outlineScroll hidden: %@",
+    LOG_TAG_NS("ScrollDebug", "outlineScroll hidden: %@",
           self.outlineScroll.hidden ? @"YES" : @"NO");
-    NSLog(@"[ScrollDebug] outlineScroll alphaValue: %.2f",
+    LOG_TAG_NS("ScrollDebug", "outlineScroll alphaValue: %.2f",
           self.outlineScroll.alphaValue);
 
     // 确保outline view布局正确
@@ -1062,13 +1068,14 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     [self.outline layoutSubtreeIfNeeded];
 
     // 打印outline view信息
-    NSLog(@"[ScrollDebug] outline frame: %@",
+    LOG_TAG_NS("ScrollDebug", "outline frame: %@",
           NSStringFromRect(self.outline.frame));
-    NSLog(@"[ScrollDebug] outline bounds: %@",
+    LOG_TAG_NS("ScrollDebug", "outline bounds: %@",
           NSStringFromRect(self.outline.bounds));
-    NSLog(@"[ScrollDebug] outline numberOfRows: %ld",
+    LOG_TAG_NS("ScrollDebug", "outline numberOfRows: %ld",
           (long)[self.outline numberOfRows]);
-    NSLog(@"[ScrollDebug] outline rowHeight: %.1f", [self.outline rowHeight]);
+    LOG_TAG_NS("ScrollDebug", "outline rowHeight: %.1f", [self.outline
+rowHeight]);
 
     // 更新滚动视图内容大小
     [self.outlineScroll.documentView setNeedsLayout:YES];
@@ -1076,90 +1083,91 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
     // 打印内容视图信息
     NSView* contentView = self.outlineScroll.contentView;
-    NSLog(@"[ScrollDebug] contentView frame: %@",
+    LOG_TAG_NS("ScrollDebug", "contentView frame: %@",
           NSStringFromRect(contentView.frame));
-    NSLog(@"[ScrollDebug] contentView bounds: %@",
+    LOG_TAG_NS("ScrollDebug", "contentView bounds: %@",
           NSStringFromRect(contentView.bounds));
-    NSLog(@"[ScrollDebug] documentView frame: %@",
+    LOG_TAG_NS("ScrollDebug", "documentView frame: %@",
           NSStringFromRect(self.outlineScroll.documentView.frame));
 
     // 强制重新计算滚动条
     [self.outlineScroll setNeedsDisplay:YES];
 
     // 详细检查滚动条状态
-    NSLog(@"[ScrollDebug] hasVerticalScroller: %@",
+    LOG_TAG_NS("ScrollDebug", "hasVerticalScroller: %@",
           self.outlineScroll.hasVerticalScroller ? @"YES" : @"NO");
-    NSLog(@"[ScrollDebug] hasHorizontalScroller: %@",
+    LOG_TAG_NS("ScrollDebug", "hasHorizontalScroller: %@",
           self.outlineScroll.hasHorizontalScroller ? @"YES" : @"NO");
-    NSLog(@"[ScrollDebug] autohidesScrollers: %@",
+    LOG_TAG_NS("ScrollDebug", "autohidesScrollers: %@",
           self.outlineScroll.autohidesScrollers ? @"YES" : @"NO");
-    NSLog(@"[ScrollDebug] scrollerStyle: %ld",
+    LOG_TAG_NS("ScrollDebug", "scrollerStyle: %ld",
           (long)self.outlineScroll.scrollerStyle);
-    NSLog(@"[ScrollDebug] borderType: %ld",
+    LOG_TAG_NS("ScrollDebug", "borderType: %ld",
           (long)self.outlineScroll.borderType);
 
     // 确保滚动条可见性正确
     if (self.outlineScroll.hasVerticalScroller) {
       NSScroller* vScroller = self.outlineScroll.verticalScroller;
       if (vScroller) {
-        NSLog(@"[ScrollDebug] verticalScroller 存在");
-        NSLog(@"[ScrollDebug] verticalScroller frame: %@",
+        LOG_TAG_NS("ScrollDebug", "verticalScroller 存在");
+        LOG_TAG_NS("ScrollDebug", "verticalScroller frame: %@",
               NSStringFromRect(vScroller.frame));
-        NSLog(@"[ScrollDebug] verticalScroller bounds: %@",
+        LOG_TAG_NS("ScrollDebug", "verticalScroller bounds: %@",
               NSStringFromRect(vScroller.bounds));
-        NSLog(@"[ScrollDebug] verticalScroller hidden: %@",
+        LOG_TAG_NS("ScrollDebug", "verticalScroller hidden: %@",
               vScroller.hidden ? @"YES" : @"NO");
-        NSLog(@"[ScrollDebug] verticalScroller enabled: %@",
+        LOG_TAG_NS("ScrollDebug", "verticalScroller enabled: %@",
               vScroller.enabled ? @"YES" : @"NO");
-        NSLog(@"[ScrollDebug] verticalScroller alphaValue: %.2f",
+        LOG_TAG_NS("ScrollDebug", "verticalScroller alphaValue: %.2f",
               vScroller.alphaValue);
-        NSLog(@"[ScrollDebug] verticalScroller controlSize: %ld",
+        LOG_TAG_NS("ScrollDebug", "verticalScroller controlSize: %ld",
               (long)vScroller.controlSize);
-        NSLog(@"[ScrollDebug] verticalScroller scrollerStyle: %ld",
+        LOG_TAG_NS("ScrollDebug", "verticalScroller scrollerStyle: %ld",
               (long)vScroller.scrollerStyle);
-        NSLog(@"[ScrollDebug] verticalScroller knobProportion: %.3f",
+        LOG_TAG_NS("ScrollDebug", "verticalScroller knobProportion: %.3f",
               vScroller.knobProportion);
-        NSLog(@"[ScrollDebug] verticalScroller doubleValue: %.3f",
+        LOG_TAG_NS("ScrollDebug", "verticalScroller doubleValue: %.3f",
               vScroller.doubleValue);
 
         [vScroller setEnabled:YES];
         [vScroller setHidden:NO];
         [vScroller setNeedsDisplay:YES];
 
-        NSLog(@"[ScrollDebug] 滚动条属性已强制设置");
+        LOG_TAG_NS("ScrollDebug", "滚动条属性已强制设置");
       } else {
-        NSLog(@"[ScrollDebug] ❌ verticalScroller 为 nil！");
+        LOG_TAG_NS("ScrollDebug", "❌ verticalScroller 为 nil！");
       }
     } else {
-      NSLog(@"[ScrollDebug] ❌ hasVerticalScroller 为 NO！");
+      LOG_TAG_NS("ScrollDebug", "❌ hasVerticalScroller 为 NO！");
     }
 
-    NSLog(@"[BookmarkControl] 书签滚动视图已更新，滚动条状态已刷新");
+    LOG_TAG_NS("BookmarkControl", "书签滚动视图已更新，滚动条状态已刷新");
   } else {
     if (!self.outlineScroll) {
-      NSLog(@"[ScrollDebug] ❌ outlineScroll 为 nil！");
+      LOG_TAG_NS("ScrollDebug", "❌ outlineScroll 为 nil！");
     } else if (self.outlineScroll.hidden) {
-      NSLog(@"[ScrollDebug] ❌ outlineScroll 被隐藏！");
+      LOG_TAG_NS("ScrollDebug", "❌ outlineScroll 被隐藏！");
     }
   }
 
-  NSLog(@"[ScrollDebug] ========== updateBookmarkScrollView 结束 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== updateBookmarkScrollView 结束
+==========");
 }
 
 - (void)ensureBookmarkScrollBarVisible {
-  NSLog(@"[ScrollDebug] ========== ensureBookmarkScrollBarVisible 开始 "
+  LOG_TAG_NS("ScrollDebug", "========== ensureBookmarkScrollBarVisible 开始 "
         @"==========");
 
   if (!self.outlineScroll || self.outlineScroll.hidden) {
     if (!self.outlineScroll) {
-      NSLog(@"[ScrollDebug] ❌ outlineScroll 为 nil，退出");
+      LOG_TAG_NS("ScrollDebug", "❌ outlineScroll 为 nil，退出");
     } else {
-      NSLog(@"[ScrollDebug] ❌ outlineScroll 被隐藏，退出");
+      LOG_TAG_NS("ScrollDebug", "❌ outlineScroll 被隐藏，退出");
     }
     return;
   }
 
-  NSLog(@"[ScrollDebug] 检查并确保滚动条可见性");
+  LOG_TAG_NS("ScrollDebug", "检查并确保滚动条可见性");
 
   // 获取outline view的内容高度
   NSInteger rowCount = [self.outline numberOfRows];
@@ -1168,31 +1176,32 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   CGFloat visibleHeight = self.outlineScroll.contentView.bounds.size.height;
   CGFloat scrollViewHeight = self.outlineScroll.bounds.size.height;
 
-  NSLog(@"[ScrollDebug] 行数: %ld", (long)rowCount);
-  NSLog(@"[ScrollDebug] 行高: %.1f", rowHeight);
-  NSLog(@"[ScrollDebug] 总内容高度: %.1f", totalContentHeight);
-  NSLog(@"[ScrollDebug] 可见高度(contentView): %.1f", visibleHeight);
-  NSLog(@"[ScrollDebug] 滚动视图高度: %.1f", scrollViewHeight);
+  LOG_TAG_NS("ScrollDebug", "行数: %ld", (long)rowCount);
+  LOG_TAG_NS("ScrollDebug", "行高: %.1f", rowHeight);
+  LOG_TAG_NS("ScrollDebug", "总内容高度: %.1f", totalContentHeight);
+  LOG_TAG_NS("ScrollDebug", "可见高度(contentView): %.1f", visibleHeight);
+  LOG_TAG_NS("ScrollDebug", "滚动视图高度: %.1f", scrollViewHeight);
 
   // 如果内容高度超过可见高度，确保滚动条可见
   BOOL shouldShowScrollBar = (totalContentHeight > visibleHeight);
-  NSLog(@"[ScrollDebug] 是否应该显示滚动条: %@",
+  LOG_TAG_NS("ScrollDebug", "是否应该显示滚动条: %@",
         shouldShowScrollBar ? @"YES" : @"NO");
 
   if (shouldShowScrollBar) {
-    NSLog(@"[ScrollDebug] 内容超出可见区域，强制显示滚动条");
+    LOG_TAG_NS("ScrollDebug", "内容超出可见区域，强制显示滚动条");
 
     // 强制显示滚动条
     self.outlineScroll.hasVerticalScroller = YES;
     self.outlineScroll.autohidesScrollers = NO;
 
-    NSLog(@"[ScrollDebug] 设置 hasVerticalScroller = YES, autohidesScrollers = "
+    LOG_TAG_NS("ScrollDebug", "设置 hasVerticalScroller = YES,
+autohidesScrollers = "
           @"NO");
 
     NSScroller* vScroller = self.outlineScroll.verticalScroller;
     if (vScroller) {
-      NSLog(@"[ScrollDebug] 找到 verticalScroller，开始配置");
-      NSLog(@"[ScrollDebug] 配置前 - hidden: %@, enabled: %@",
+      LOG_TAG_NS("ScrollDebug", "找到 verticalScroller，开始配置");
+      LOG_TAG_NS("ScrollDebug", "配置前 - hidden: %@, enabled: %@",
             vScroller.hidden ? @"YES" : @"NO",
             vScroller.enabled ? @"YES" : @"NO");
 
@@ -1206,41 +1215,41 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
         vScroller.scrollerStyle = NSScrollerStyleOverlay;
       }
 
-      NSLog(@"[ScrollDebug] 配置后 - hidden: %@, enabled: %@, style: %ld",
+      LOG_TAG_NS("ScrollDebug", "配置后 - hidden: %@, enabled: %@, style: %ld",
             vScroller.hidden ? @"YES" : @"NO",
             vScroller.enabled ? @"YES" : @"NO", (long)vScroller.scrollerStyle);
-      NSLog(@"[ScrollDebug] 滚动条 frame: %@",
+      LOG_TAG_NS("ScrollDebug", "滚动条 frame: %@",
             NSStringFromRect(vScroller.frame));
 
-      NSLog(@"[BookmarkControl] 滚动条已强制显示，样式: %ld",
+      LOG_TAG_NS("BookmarkControl", "滚动条已强制显示，样式: %ld",
             (long)vScroller.scrollerStyle);
     } else {
-      NSLog(@"[ScrollDebug] ❌ verticalScroller 仍然为 nil！");
+      LOG_TAG_NS("ScrollDebug", "❌ verticalScroller 仍然为 nil！");
 
       // 尝试重新创建滚动条
-      NSLog(@"[ScrollDebug] 尝试重新设置滚动条...");
+      LOG_TAG_NS("ScrollDebug", "尝试重新设置滚动条...");
       self.outlineScroll.hasVerticalScroller = NO;
       self.outlineScroll.hasVerticalScroller = YES;
 
       vScroller = self.outlineScroll.verticalScroller;
       if (vScroller) {
-        NSLog(@"[ScrollDebug] ✅ 重新创建滚动条成功！");
+        LOG_TAG_NS("ScrollDebug", "✅ 重新创建滚动条成功！");
         [vScroller setEnabled:YES];
         [vScroller setHidden:NO];
         [vScroller setNeedsDisplay:YES];
       } else {
-        NSLog(@"[ScrollDebug] ❌ 重新创建滚动条失败！");
+        LOG_TAG_NS("ScrollDebug", "❌ 重新创建滚动条失败！");
       }
     }
   } else {
-    NSLog(@"[ScrollDebug] 内容较少，滚动条可能自动隐藏");
-    NSLog(@"[ScrollDebug] 但仍然尝试确保滚动条存在...");
+    LOG_TAG_NS("ScrollDebug", "内容较少，滚动条可能自动隐藏");
+    LOG_TAG_NS("ScrollDebug", "但仍然尝试确保滚动条存在...");
 
     // 即使内容较少，也确保滚动条存在（可能处于禁用状态）
     self.outlineScroll.hasVerticalScroller = YES;
     NSScroller* vScroller = self.outlineScroll.verticalScroller;
     if (vScroller) {
-      NSLog(@"[ScrollDebug] 滚动条存在，frame: %@",
+      LOG_TAG_NS("ScrollDebug", "滚动条存在，frame: %@",
             NSStringFromRect(vScroller.frame));
     }
   }
@@ -1249,15 +1258,15 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   [self.outlineScroll setNeedsDisplay:YES];
   [self.outlineScroll.contentView setNeedsDisplay:YES];
 
-  NSLog(@"[ScrollDebug] ========== ensureBookmarkScrollBarVisible 结束 "
+  LOG_TAG_NS("ScrollDebug", "========== ensureBookmarkScrollBarVisible 结束 "
         @"==========");
 }
 
 - (void)forceTraditionalScrollBar {
-  NSLog(@"[ScrollDebug] ========== 强制使用传统滚动条样式 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== 强制使用传统滚动条样式 ==========");
 
   if (!self.outlineScroll) {
-    NSLog(@"[ScrollDebug] ❌ outlineScroll 为 nil，无法设置滚动条样式");
+    LOG_TAG_NS("ScrollDebug", "❌ outlineScroll 为 nil，无法设置滚动条样式");
     return;
   }
 
@@ -1266,7 +1275,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   self.outlineScroll.autohidesScrollers = NO;
   self.outlineScroll.hasVerticalScroller = YES;
 
-  NSLog(@"[ScrollDebug] 设置为传统滚动条样式");
+  LOG_TAG_NS("ScrollDebug", "设置为传统滚动条样式");
 
   NSScroller* vScroller = self.outlineScroll.verticalScroller;
   if (vScroller) {
@@ -1276,54 +1285,54 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     [vScroller setHidden:NO];
     [vScroller setNeedsDisplay:YES];
 
-    NSLog(@"[ScrollDebug] 传统滚动条配置完成");
-    NSLog(@"[ScrollDebug] 滚动条 frame: %@", NSStringFromRect(vScroller.frame));
-    NSLog(@"[ScrollDebug] 滚动条 style: %ld", (long)vScroller.scrollerStyle);
-  } else {
-    NSLog(@"[ScrollDebug] ❌ 无法获取垂直滚动条");
+    LOG_TAG_NS("ScrollDebug", "传统滚动条配置完成");
+    LOG_TAG_NS("ScrollDebug", "滚动条 frame: %@",
+NSStringFromRect(vScroller.frame)); LOG_TAG_NS("ScrollDebug", "滚动条 style:
+%ld", (long)vScroller.scrollerStyle); } else { LOG_TAG_NS("ScrollDebug", "❌
+无法获取垂直滚动条");
   }
 
   // 强制刷新
   [self.outlineScroll setNeedsDisplay:YES];
   [self.outlineScroll.contentView setNeedsDisplay:YES];
 
-  NSLog(@"[ScrollDebug] ========== 传统滚动条样式设置完成 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== 传统滚动条样式设置完成 ==========");
 }
 
 - (void)checkScrollBarOverlap {
-  NSLog(@"[ScrollDebug] ========== 检查滚动条遮挡情况 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== 检查滚动条遮挡情况 ==========");
 
   if (!self.outlineScroll || self.outlineScroll.hidden) {
-    NSLog(@"[ScrollDebug] 滚动视图不存在或被隐藏，跳过检查");
+    LOG_TAG_NS("ScrollDebug", "滚动视图不存在或被隐藏，跳过检查");
     return;
   }
 
   NSScroller* vScroller = self.outlineScroll.verticalScroller;
   if (!vScroller) {
-    NSLog(@"[ScrollDebug] ❌ 垂直滚动条不存在");
+    LOG_TAG_NS("ScrollDebug", "❌ 垂直滚动条不存在");
     return;
   }
 
-  NSLog(@"[ScrollDebug] 滚动条信息:");
-  NSLog(@"[ScrollDebug] - frame: %@", NSStringFromRect(vScroller.frame));
-  NSLog(@"[ScrollDebug] - bounds: %@", NSStringFromRect(vScroller.bounds));
-  NSLog(@"[ScrollDebug] - superview: %@", vScroller.superview);
-  NSLog(@"[ScrollDebug] - hidden: %@", vScroller.hidden ? @"YES" : @"NO");
-  NSLog(@"[ScrollDebug] - alphaValue: %.2f", vScroller.alphaValue);
+  LOG_TAG_NS("ScrollDebug", "滚动条信息:");
+  LOG_TAG_NS("ScrollDebug", "- frame: %@", NSStringFromRect(vScroller.frame));
+  LOG_TAG_NS("ScrollDebug", "- bounds: %@", NSStringFromRect(vScroller.bounds));
+  LOG_TAG_NS("ScrollDebug", "- superview: %@", vScroller.superview);
+  LOG_TAG_NS("ScrollDebug", "- hidden: %@", vScroller.hidden ? @"YES" : @"NO");
+  LOG_TAG_NS("ScrollDebug", "- alphaValue: %.2f", vScroller.alphaValue);
 
   // 检查滚动视图的布局
-  NSLog(@"[ScrollDebug] 滚动视图布局:");
-  NSLog(@"[ScrollDebug] - outlineScroll frame: %@",
+  LOG_TAG_NS("ScrollDebug", "滚动视图布局:");
+  LOG_TAG_NS("ScrollDebug", "- outlineScroll frame: %@",
         NSStringFromRect(self.outlineScroll.frame));
-  NSLog(@"[ScrollDebug] - outlineScroll bounds: %@",
+  LOG_TAG_NS("ScrollDebug", "- outlineScroll bounds: %@",
         NSStringFromRect(self.outlineScroll.bounds));
-  NSLog(@"[ScrollDebug] - contentView frame: %@",
+  LOG_TAG_NS("ScrollDebug", "- contentView frame: %@",
         NSStringFromRect(self.outlineScroll.contentView.frame));
-  NSLog(@"[ScrollDebug] - documentView frame: %@",
+  LOG_TAG_NS("ScrollDebug", "- documentView frame: %@",
         NSStringFromRect(self.outlineScroll.documentView.frame));
 
   // 检查左侧面板的所有子视图
-  NSLog(@"[ScrollDebug] 左侧面板子视图:");
+  LOG_TAG_NS("ScrollDebug", "左侧面板子视图:");
   for (NSUInteger i = 0; i < self.leftPanel.subviews.count; i++) {
     NSView* subview = self.leftPanel.subviews[i];
     NSRect subviewFrame = subview.frame;
@@ -1335,26 +1344,26 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
     BOOL overlaps = NSIntersectsRect(subviewFrame, scrollerInPanel);
 
-    NSLog(@"[ScrollDebug] - subview[%lu]: %@ frame: %@ %@", (unsigned long)i,
-          NSStringFromClass([subview class]), NSStringFromRect(subviewFrame),
+    LOG_TAG_NS("ScrollDebug", "- subview[%lu]: %@ frame: %@ %@", (unsigned
+long)i, NSStringFromClass([subview class]), NSStringFromRect(subviewFrame),
           overlaps ? @"⚠️ 可能遮挡滚动条" : @"✅ 无遮挡");
   }
 
-  NSLog(@"[ScrollDebug] ========== 滚动条遮挡检查完成 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== 滚动条遮挡检查完成 ==========");
 }
 
 - (void)ensureLeftPanelSize {
-  NSLog(@"[ScrollDebug] ========== 确保左侧面板尺寸正确 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== 确保左侧面板尺寸正确 ==========");
 
   CGFloat expectedWidth =
       self.bookmarkVisible ? kBookmarkExpandedWidth : kBookmarkCollapsedWidth;
   NSRect currentFrame = self.leftPanel.frame;
 
-  NSLog(@"[ScrollDebug] 当前面板宽度: %.1f, 期望宽度: %.1f",
+  LOG_TAG_NS("ScrollDebug", "当前面板宽度: %.1f, 期望宽度: %.1f",
         currentFrame.size.width, expectedWidth);
 
   if (fabs(currentFrame.size.width - expectedWidth) > 1.0) {
-    NSLog(@"[ScrollDebug] ⚠️ 面板宽度不匹配，强制修正");
+    LOG_TAG_NS("ScrollDebug", "⚠️ 面板宽度不匹配，强制修正");
 
     // 强制修正面板宽度
     NSRect correctedFrame = currentFrame;
@@ -1364,10 +1373,10 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     // 同时修正分割视图位置
     [self.split setPosition:expectedWidth ofDividerAtIndex:0];
 
-    NSLog(@"[ScrollDebug] ✅ 面板宽度已修正为: %@",
+    LOG_TAG_NS("ScrollDebug", "✅ 面板宽度已修正为: %@",
           NSStringFromRect(self.leftPanel.frame));
   } else {
-    NSLog(@"[ScrollDebug] ✅ 面板宽度正确");
+    LOG_TAG_NS("ScrollDebug", "✅ 面板宽度正确");
   }
 
   // 如果书签可见，确保滚动视图frame正确
@@ -1377,26 +1386,26 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                    self.leftPanel.bounds.size.height - kControlBarHeight);
     NSRect currentScrollFrame = self.outlineScroll.frame;
 
-    NSLog(@"[ScrollDebug] 滚动视图当前frame: %@",
+    LOG_TAG_NS("ScrollDebug", "滚动视图当前frame: %@",
           NSStringFromRect(currentScrollFrame));
-    NSLog(@"[ScrollDebug] 滚动视图期望frame: %@",
+    LOG_TAG_NS("ScrollDebug", "滚动视图期望frame: %@",
           NSStringFromRect(expectedScrollFrame));
 
     if (!NSEqualRects(currentScrollFrame, expectedScrollFrame)) {
-      NSLog(@"[ScrollDebug] ⚠️ 滚动视图frame不匹配，强制修正");
+      LOG_TAG_NS("ScrollDebug", "⚠️ 滚动视图frame不匹配，强制修正");
       self.outlineScroll.frame = expectedScrollFrame;
-      NSLog(@"[ScrollDebug] ✅ 滚动视图frame已修正");
+      LOG_TAG_NS("ScrollDebug", "✅ 滚动视图frame已修正");
     }
   }
 
-  NSLog(@"[ScrollDebug] ========== 左侧面板尺寸检查完成 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== 左侧面板尺寸检查完成 ==========");
 }
 
 - (void)updateExpandedControlBarLayout {
-  NSLog(@"[ScrollDebug] ========== 更新展开状态控制栏布局 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== 更新展开状态控制栏布局 ==========");
 
   if (!self.bookmarkVisible || !self.expandedTopControlBar) {
-    NSLog(@"[ScrollDebug] 书签未展开或控制栏不存在，跳过更新");
+    LOG_TAG_NS("ScrollDebug", "书签未展开或控制栏不存在，跳过更新");
     return;
   }
 
@@ -1408,11 +1417,11 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       NSMakeRect(0, controlBarY, expandedWidth, kControlBarHeight);
   NSRect currentFrame = self.expandedTopControlBar.frame;
 
-  NSLog(@"[ScrollDebug] 控制栏当前frame: %@", NSStringFromRect(currentFrame));
-  NSLog(@"[ScrollDebug] 控制栏期望frame: %@", NSStringFromRect(correctFrame));
-  NSLog(@"[ScrollDebug] 左侧面板bounds: %@",
-        NSStringFromRect(self.leftPanel.bounds));
-  NSLog(@"[ScrollDebug] 使用实际面板宽度: %.1f", expandedWidth);
+  LOG_TAG_NS("ScrollDebug", "控制栏当前frame: %@",
+NSStringFromRect(currentFrame)); LOG_TAG_NS("ScrollDebug", "控制栏期望frame:
+%@", NSStringFromRect(correctFrame)); LOG_TAG_NS("ScrollDebug", "左侧面板bounds:
+%@", NSStringFromRect(self.leftPanel.bounds)); LOG_TAG_NS("ScrollDebug",
+"使用实际面板宽度: %.1f", expandedWidth);
 
   // 总是更新控制栏frame和子视图位置
   self.expandedTopControlBar.frame = correctFrame;
@@ -1423,7 +1432,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       NSRect separatorFrame = subview.frame;
       separatorFrame.size.width = expandedWidth;
       subview.frame = separatorFrame;
-      NSLog(@"[ScrollDebug] 分隔线宽度已更新: %.1f", expandedWidth);
+      LOG_TAG_NS("ScrollDebug", "分隔线宽度已更新: %.1f", expandedWidth);
     } else if ([subview isKindOfClass:[NSButton class]]) {
       NSButton* button = (NSButton*)subview;
       if ([button.title isEqualToString:@"◀"]) {  // 收起按钮
@@ -1436,15 +1445,15 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
         NSRect newButtonFrame =
             NSMakeRect(buttonX, yCenter, buttonWidth, buttonHeight);
         button.frame = newButtonFrame;
-        NSLog(@"[ScrollDebug] ◀按钮位置已更新: %@",
+        LOG_TAG_NS("ScrollDebug", "◀按钮位置已更新: %@",
               NSStringFromRect(newButtonFrame));
       }
     }
   }
 
-  NSLog(@"[ScrollDebug] ✅ 控制栏布局更新完成");
+  LOG_TAG_NS("ScrollDebug", "✅ 控制栏布局更新完成");
 
-  NSLog(@"[ScrollDebug] ========== 控制栏布局更新完成 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== 控制栏布局更新完成 ==========");
 }
 
 #pragma mark - NSSplitViewDelegate
@@ -1457,23 +1466,23 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     return;
   }
 
-  NSLog(@"[ScrollDebug] ========== 分割视图尺寸改变 ==========");
-  NSLog(@"[ScrollDebug] 左侧面板新尺寸: %@",
+  LOG_TAG_NS("ScrollDebug", "========== 分割视图尺寸改变 ==========");
+  LOG_TAG_NS("ScrollDebug", "左侧面板新尺寸: %@",
         NSStringFromRect(self.leftPanel.frame));
 
   // 当分割视图尺寸改变时，更新控制栏布局
   if (self.bookmarkVisible && self.expandedTopControlBar) {
-    NSLog(@"[ScrollDebug] 由于分割视图变化，更新展开状态控制栏布局");
+    LOG_TAG_NS("ScrollDebug", "由于分割视图变化，更新展开状态控制栏布局");
     [self updateExpandedControlBarLayout];
   }
 
   // 更新检查器布局以适应新的窗口大小
   if (self.inspectorVisible) {
-    NSLog(@"[Inspector] 由于分割视图变化，更新检查器布局");
+    LOG_TAG_NS("Inspector", "由于分割视图变化，更新检查器布局");
     [self updateInspectorLayout];
   }
 
-  NSLog(@"[ScrollDebug] ========== 分割视图尺寸改变处理完成 ==========");
+  LOG_TAG_NS("ScrollDebug", "========== 分割视图尺寸改变处理完成 ==========");
 }
 
 - (CGFloat)splitView:(NSSplitView*)splitView
@@ -1606,7 +1615,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       [self.inspectorTextView characterIndexForInsertionAtPoint:clickPoint];
   NSString* text = self.inspectorTextView.string;
 
-  NSLog(@"[Inspector] 点击位置: (%.1f, %.1f), 字符索引: %lu", clickPoint.x,
+  LOG_TAG_NS("Inspector", "点击位置: (%.1f, %.1f), 字符索引: %lu", clickPoint.x,
         clickPoint.y, charIndex);
 
   // 查找点击位置附近的对象引用（格式：数字 0 R）
@@ -1616,7 +1625,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                                 options:0
                                                   error:&error];
   if (error) {
-    NSLog(@"[Inspector] 正则表达式错误: %@", error.localizedDescription);
+    LOG_TAG_NS("Inspector", "正则表达式错误: %@", error.localizedDescription);
     return;
   }
 
@@ -1628,7 +1637,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                        usingBlock:^(NSTextCheckingResult* match,
                                     NSMatchingFlags flags, BOOL* stop) {
                          NSRange matchRange = [match range];
-                         NSLog(@"[Inspector] 找到匹配: %@, 范围: %@",
+                         LOG_TAG_NS("Inspector", "找到匹配: %@, 范围: %@",
                                [text substringWithRange:matchRange],
                                NSStringFromRange(matchRange));
 
@@ -1639,7 +1648,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                [text substringWithRange:[match rangeAtIndex:1]];
                            targetObjNum = (uint32_t)[objNumStr integerValue];
                            foundRange = matchRange;
-                           NSLog(@"[Inspector] 点击命中对象引用: %u",
+                           LOG_TAG_NS("Inspector", "点击命中对象引用: %u",
                                  targetObjNum);
                            *stop = YES;
                          }
@@ -1649,7 +1658,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   if (targetObjNum > 0) {
     NSString* objKey = [NSString stringWithFormat:@"%u", targetObjNum];
     NSNumber* position = [self.objectPositions objectForKey:objKey];
-    NSLog(@"[Inspector] 查找对象 %u 的位置，映射表中有 %lu 个对象",
+    LOG_TAG_NS("Inspector", "查找对象 %u 的位置，映射表中有 %lu 个对象",
           targetObjNum, self.objectPositions.count);
 
     if (position) {
@@ -1658,17 +1667,17 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       [self.inspectorTextView scrollRangeToVisible:targetRange];
       [self.inspectorTextView
           setSelectedRange:NSMakeRange(targetPos, 20)];  // 高亮显示更多字符
-      NSLog(@"[Inspector] 成功跳转到对象 %u，位置：%lu", targetObjNum,
+      LOG_TAG_NS("Inspector", "成功跳转到对象 %u，位置：%lu", targetObjNum,
             targetPos);
     } else {
-      NSLog(@"[Inspector] 未找到对象 %u 的位置信息", targetObjNum);
+      LOG_TAG_NS("Inspector", "未找到对象 %u 的位置信息", targetObjNum);
       // 打印所有可用的对象号
       NSArray* allKeys = [self.objectPositions.allKeys
           sortedArrayUsingSelector:@selector(compare:)];
-      NSLog(@"[Inspector] 可用对象号: %@", allKeys);
+      LOG_TAG_NS("Inspector", "可用对象号: %@", allKeys);
     }
   } else {
-    NSLog(@"[Inspector] 点击位置未找到对象引用");
+    LOG_TAG_NS("Inspector", "点击位置未找到对象引用");
   }
 }
 
@@ -1746,7 +1755,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     return;
   }
 
-  NSLog(@"[PdfWinViewer] openPathAndAdjust: %@", path);
+  LOG_TAG_NS("PdfWinViewer", "openPathAndAdjust: %@", path);
   LOG_INFO_F("用户请求打开文件：%s", [[path lastPathComponent] UTF8String]);
 
   // 检查文件是否存在
@@ -1768,83 +1777,13 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     LOG_INFO_F("文件大小：%.2f MB", fileSize / (1024.0 * 1024.0));
   }
 
-  MacLog_DebugNS(@"[OpenFile] 准备调用 [self.view openPDFAtPath:path]");
+  MacLog_DebugNS(@"[OpenFile] 准备调用 [self.view openPDFAtPath:path]（异步）");
   MacLog_DebugNS(
       [NSString stringWithFormat:@"[OpenFile] self.view = %@", self.view]);
 
-  if ([self.view openPDFAtPath:path]) {
-    MacLog_DebugNS(@"[StatusBar] PDF文件打开成功，准备更新状态栏");
-    LOG_INFO("PDF 文件加载成功，开始初始化界面");
-
-    MacLog_DebugNS(@"[OpenFile] 调用 rebuildToc");
-    [self rebuildToc];
-
-    MacLog_DebugNS(@"[OpenFile] 设置 first responder");
-    [self.window makeFirstResponder:self.view];
-
-    // 更新状态栏显示（确保状态栏已初始化）
-    MacLog_DebugNS(
-        [NSString stringWithFormat:@"[OpenFile] 更新状态栏，statusBar = %@",
-                                   self.statusBar]);
-    if (self.statusBar) {
-      [self updateStatusBar];
-    } else {
-      MacLog_DebugNS(@"[StatusBar] 状态栏尚未初始化，跳过更新");
-    }
-
-    // 高亮当前书签
-    MacLog_DebugNS(@"[OpenFile] 高亮书签");
-    [self highlightCurrentBookmark];
-
-    // 先调整窗口大小（不显示、不动画），避免触发额外的重绘
-    NSSize s = [self.view currentPageSizePt];
-    MacLog_DebugNS(
-        [NSString stringWithFormat:@"[OpenFile] 当前页面大小：%.0f x %.0f",
-                                   s.width, s.height]);
-    CGFloat newW = MIN(MAX(800, s.width + 300), 1600);  // 预留左栏与边距
-    CGFloat newH = MIN(MAX(600, s.height + 120), 1200);
-    NSRect f = self.window.frame;
-    f.size = NSMakeSize(newW, newH);
-    [self.window setFrame:f display:NO animate:NO];
-    LOG_DEBUG_F("窗口大小调整为：%.0f x %.0f", newW, newH);
-    MacLog_DebugNS(
-        [NSString stringWithFormat:@"[OpenFile] 窗口大小已调整为：%.0f x %.0f",
-                                   newW, newH]);
-
-    // 然后更新视图尺寸，setFrameSize 会自动触发 drawRect（唯一的渲染）
-    MacLog_DebugNS(@"[OpenFile] 调用 updateViewSizeToFitPage");
-    [self.view updateViewSizeToFitPage];
-    MacLog_DebugNS([NSString
-        stringWithFormat:
-            @"[OpenFile] PdfView frame after updateViewSizeToFitPage: %@",
-            NSStringFromRect(self.view.frame)]);
-
-    // 更新窗口标题
-    self.window.title = [NSString
-        stringWithFormat:@"PdfWinViewer - %@", path.lastPathComponent];
-    // 写入最近
-    [self addRecentPath:path];
-    NSLog(@"[PdfWinViewer] after addRecentPath, recent count=%lu",
-          (unsigned long)self.recentPaths.count);
-    LOG_DEBUG_F("已添加到最近文件列表，当前列表数量：%lu",
-                (unsigned long)self.recentPaths.count);
-
-    // 启用"导出当前页为 PNG"
-    NSMenu* fileMenu = [[[NSApp mainMenu] itemWithTitle:@"文件"] submenu];
-    NSMenuItem* exp = [fileMenu itemWithTag:9901];
-    if (exp) {
-      [exp setEnabled:YES];
-    }
-
-    LOG_INFO_F("文件打开完成：%s", [[path lastPathComponent] UTF8String]);
-    LOG_INFO_F("========================================");
-  } else {
-    LOG_ERROR_F("无法打开 PDF 文件：%s", [path UTF8String]);
-    NSAlert* alert = [NSAlert new];
-    alert.messageText = @"无法打开 PDF";
-    alert.informativeText = path ?: @"";
-    [alert runModal];
-  }
+  // 启动异步加载，结果将通过 delegate 回调返回
+  [self.view openPDFAtPath:path];
+  // 注意：后续的UI更新逻辑已移至 pdfView:didFinishLoadingDocument:error: 回调
 }
 
 @end
@@ -1856,7 +1795,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   NSString* execPath = [[NSBundle mainBundle] executablePath];
   NSString* execDir = [execPath stringByDeletingLastPathComponent];
   NSString* path = [execDir stringByAppendingPathComponent:@"settings.json"];
-  NSLog(@"[PdfWinViewer] settings.json path=%@", path);
+  LOG_TAG_NS("PdfWinViewer", "settings.json path=%@", path);
   return path;
 }
 
@@ -1864,22 +1803,22 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   self.settingsDict = [NSMutableDictionary new];
   NSString* path = [self settingsJSONPath];
   if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
-    NSLog(@"[PdfWinViewer] settings.json not found");
+    LOG_TAG_NS("PdfWinViewer", "settings.json not found");
     return;
   }
   NSData* data = [NSData dataWithContentsOfFile:path];
   if (!data) {
-    NSLog(@"[PdfWinViewer] settings.json read failed");
+    LOG_TAG_NS("PdfWinViewer", "settings.json read failed");
     return;
   }
   NSError* err = nil;
   id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
   if (err || ![json isKindOfClass:[NSDictionary class]]) {
-    NSLog(@"[PdfWinViewer] settings.json parse failed: %@", err);
+    LOG_TAG_NS("PdfWinViewer", "settings.json parse failed: %@", err);
     return;
   }
   self.settingsDict = [((NSDictionary*)json) mutableCopy];
-  NSLog(@"[PdfWinViewer] settings loaded with %lu keys",
+  LOG_TAG_NS("PdfWinViewer", "settings loaded with %lu keys",
         (unsigned long)self.settingsDict.count);
 }
 
@@ -1893,15 +1832,15 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                       options:NSJSONWritingPrettyPrinted
                                         error:&err];
   if (err || !data) {
-    NSLog(@"[PdfWinViewer] Failed to serialize settings.json: %@", err);
+    LOG_TAG_NS("PdfWinViewer", "Failed to serialize settings.json: %@", err);
     return;
   }
   NSString* path = [self settingsJSONPath];
   BOOL ok = [data writeToFile:path options:NSDataWritingAtomic error:&err];
   if (!ok || err) {
-    NSLog(@"[PdfWinViewer] Failed to write settings.json: %@", err);
+    LOG_TAG_NS("PdfWinViewer", "Failed to write settings.json: %@", err);
   } else {
-    NSLog(@"[PdfWinViewer] settings.json saved OK");
+    LOG_TAG_NS("PdfWinViewer", "settings.json saved OK");
   }
 }
 
@@ -1909,7 +1848,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   self.recentPaths = [NSMutableArray new];
   id arr = self.settingsDict[@"recent_files"];
   if (![arr isKindOfClass:[NSArray class]]) {
-    NSLog(@"[PdfWinViewer] settings has no recent_files (or wrong type)");
+    LOG_TAG_NS("PdfWinViewer", "settings has no recent_files (or wrong type)");
     return;
   }
   for (id item in (NSArray*)arr) {
@@ -1923,7 +1862,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       }
     }
   }
-  NSLog(@"[PdfWinViewer] recent_files loaded: %@", self.recentPaths);
+  LOG_TAG_NS("PdfWinViewer", "recent_files loaded: %@", self.recentPaths);
 }
 
 - (void)persistRecentIntoSettings {
@@ -1940,7 +1879,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     return;
   }
 
-  NSLog(@"[PdfWinViewer] openPathAndAdjust: %@", path);
+  LOG_TAG_NS("PdfWinViewer", "openPathAndAdjust: %@", path);
   LOG_INFO_F("用户请求打开文件：%s", [[path lastPathComponent] UTF8String]);
 
   // 检查文件是否存在
@@ -2007,7 +1946,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
         stringWithFormat:@"PdfWinViewer - %@", path.lastPathComponent];
     // 写入最近
     [self addRecentPath:path];
-    NSLog(@"[PdfWinViewer] after addRecentPath, recent count=%lu",
+    LOG_TAG_NS("PdfWinViewer", "after addRecentPath, recent count=%lu",
           (unsigned long)self.recentPaths.count);
     LOG_DEBUG_F("已添加到最近文件列表，当前列表数量：%lu",
                 (unsigned long)self.recentPaths.count);
@@ -2036,12 +1975,9 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   }
   [self.recentMenu removeAllItems];
   NSUInteger count = self.recentPaths.count;
-  NSLog(@"[PdfWinViewer] rebuildRecentMenu count=%lu", (unsigned long)count);
-  if (count == 0) {
-    NSMenuItem* none = [[NSMenuItem alloc] initWithTitle:@"无最近项目"
-                                                  action:nil
-                                           keyEquivalent:@""];
-    none.enabled = NO;
+  LOG_TAG_NS("PdfWinViewer", "rebuildRecentMenu count=%lu", (unsigned
+long)count); if (count == 0) { NSMenuItem* none = [[NSMenuItem alloc]
+initWithTitle:@"无最近项目" action:nil keyEquivalent:@""]; none.enabled = NO;
     [self.recentMenu addItem:none];
     self.recentMenuItem.enabled = NO;
     return;
@@ -2049,7 +1985,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   self.recentMenuItem.enabled = YES;
   NSUInteger idx = 0;
   for (NSString* path in self.recentPaths) {
-    NSLog(@"[PdfWinViewer] recent item %lu: %@", (unsigned long)idx, path);
+    LOG_TAG_NS("PdfWinViewer", "recent item %lu: %@", (unsigned long)idx, path);
     NSString* title =
         path.lastPathComponent.length ? path.lastPathComponent : path;
     // 带序号
@@ -2087,7 +2023,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   [self persistRecentIntoSettings];
   // 重建菜单
   [self rebuildRecentMenu];
-  NSLog(@"[PdfWinViewer] addRecentPath done. paths=%@", self.recentPaths);
+  LOG_TAG_NS("PdfWinViewer", "addRecentPath done. paths=%@", self.recentPaths);
 }
 
 - (IBAction)openRecent:(id)sender {
@@ -2095,7 +2031,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
     return;
   }
   NSString* path = ((NSMenuItem*)sender).representedObject;
-  NSLog(@"[PdfWinViewer] openRecent: %@", path);
+  LOG_TAG_NS("PdfWinViewer", "openRecent: %@", path);
   if (path.length == 0) {
     return;
   }
@@ -2124,7 +2060,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
 #pragma mark - 状态栏相关方法 - 已迁移到StatusBarController
 /*
 - (void)createStatusBar {
-  NSLog(@"[StatusBar] 开始创建状态栏");
+  LOG_TAG_NS("StatusBar", "开始创建状态栏");
   // 创建状态栏容器
   self.statusBar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 800, 30)];
   self.statusBar.wantsLayer = YES;
@@ -2134,7 +2070,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   // 添加顶部分隔线
   self.statusBar.layer.borderWidth = 0.5;
   self.statusBar.layer.borderColor = [[NSColor separatorColor] CGColor];
-  NSLog(@"[StatusBar] 状态栏容器创建完成，frame: %@",
+  LOG_TAG_NS("StatusBar", "状态栏容器创建完成，frame: %@",
         NSStringFromRect(self.statusBar.frame));
 
   // 添加分隔线
@@ -2198,14 +2134,14 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   self.nextPageButton.enabled = NO;
   [self.statusBar addSubview:self.nextPageButton];
 
-  NSLog(@"[StatusBar] 状态栏创建完成，所有子视图已添加");
+  LOG_TAG_NS("StatusBar", "状态栏创建完成，所有子视图已添加");
 }
 */
 
 #pragma mark - 书签控制栏相关方法 - 已迁移到BookmarkPanelController
 /*
 - (void)createBookmarkControlBar {
-  NSLog(@"[BookmarkControl] 开始创建书签控制栏");
+  LOG_TAG_NS("BookmarkControl", "开始创建书签控制栏");
 
   // 创建控制栏容器（只在收起状态下可见）
   self.bookmarkControlBar = [[NSView alloc]
@@ -2236,11 +2172,11 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
 
   [self.leftPanel addSubview:self.bookmarkControlBar];
 
-  NSLog(@"[BookmarkControl] 书签控制栏创建完成");
+  LOG_TAG_NS("BookmarkControl", "书签控制栏创建完成");
 }
 
 - (void)toggleBookmarkVisibility:(id)sender {
-  NSLog(@"[BookmarkControl] 切换书签可见性，当前状态: %@",
+  LOG_TAG_NS("BookmarkControl", "切换书签可见性，当前状态: %@",
         self.bookmarkVisible ? @"可见" : @"隐藏");
   [self setBookmarkVisible:!self.bookmarkVisible animated:YES];
 }
@@ -2251,12 +2187,13 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   }
 
   self.bookmarkVisible = visible;
-  NSLog(@"[BookmarkControl] 设置书签可见性: %@", visible ? @"显示" : @"隐藏");
+  LOG_TAG_NS("BookmarkControl", "设置书签可见性: %@", visible ? @"显示" :
+@"隐藏");
 
   // 计算新的宽度 - 使用常量确保一致性
   CGFloat newWidth = visible ? kBookmarkExpandedWidth : kBookmarkCollapsedWidth;
-  NSLog(@"[ScrollDebug] 准备调整左侧面板宽度从当前到: %.1f", newWidth);
-  NSLog(@"[ScrollDebug] 当前左侧面板 frame: %@",
+  LOG_TAG_NS("ScrollDebug", "准备调整左侧面板宽度从当前到: %.1f", newWidth);
+  LOG_TAG_NS("ScrollDebug", "当前左侧面板 frame: %@",
         NSStringFromRect(self.leftPanel.frame));
 
   if (animated) {
@@ -2277,7 +2214,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
           // 调整左侧面板宽度 - 这是关键修复
           NSRect leftFrame = self.leftPanel.frame;
           leftFrame.size.width = newWidth;
-          NSLog(@"[ScrollDebug] 动画中设置左侧面板 frame: %@",
+          LOG_TAG_NS("ScrollDebug", "动画中设置左侧面板 frame: %@",
                 NSStringFromRect(leftFrame));
           self.leftPanel.animator.frame = leftFrame;
 
@@ -2291,25 +2228,25 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
         }
         completionHandler:^{
           // 动画完成后的处理
-          NSLog(@"[ScrollDebug] 动画完成，最终左侧面板 frame: %@",
+          LOG_TAG_NS("ScrollDebug", "动画完成，最终左侧面板 frame: %@",
                 NSStringFromRect(self.leftPanel.frame));
 
           if (!visible) {
             // 收起完成，移除展开状态的控件
             [self removeExpandedBookmarkControls];
-            NSLog(@"[BookmarkControl] 收起完成，显示收起状态控制栏");
+            LOG_TAG_NS("BookmarkControl", "收起完成，显示收起状态控制栏");
           } else {
             // 展开完成，确保控制栏布局正确
             [self updateExpandedControlBarLayout];
-            NSLog(@"[BookmarkControl] 展开完成，隐藏收起状态控制栏");
+            LOG_TAG_NS("BookmarkControl", "展开完成，隐藏收起状态控制栏");
           }
-          NSLog(@"[BookmarkControl] 书签切换动画完成");
+          LOG_TAG_NS("BookmarkControl", "书签切换动画完成");
         }];
   } else {
     // 立即切换
     NSRect leftFrame = self.leftPanel.frame;
     leftFrame.size.width = newWidth;
-    NSLog(@"[ScrollDebug] 立即设置左侧面板 frame: %@",
+    LOG_TAG_NS("ScrollDebug", "立即设置左侧面板 frame: %@",
           NSStringFromRect(leftFrame));
     self.leftPanel.frame = leftFrame;
 
@@ -2320,17 +2257,17 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
       self.bookmarkControlBar.hidden = YES;  // 隐藏收起状态的控制栏
       // 立即更新控制栏布局
       [self updateExpandedControlBarLayout];
-      NSLog(@"[BookmarkControl] 立即展开，隐藏收起状态控制栏");
+      LOG_TAG_NS("BookmarkControl", "立即展开，隐藏收起状态控制栏");
     } else {
       [self removeExpandedBookmarkControls];
       self.bookmarkControlBar.hidden = NO;  // 显示收起状态的控制栏
-      NSLog(@"[BookmarkControl] 立即收起，显示收起状态控制栏");
+      LOG_TAG_NS("BookmarkControl", "立即收起，显示收起状态控制栏");
     }
   }
 }
 
 - (void)expandAllBookmarks:(id)sender {
-  NSLog(@"[BookmarkControl] 展开所有书签");
+  LOG_TAG_NS("BookmarkControl", "展开所有书签");
   [self.outline expandItem:nil expandChildren:YES];
 
   // 延迟更新滚动条，确保展开动画完成
@@ -2343,7 +2280,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
 }
 
 - (void)collapseAllBookmarks:(id)sender {
-  NSLog(@"[BookmarkControl] 折叠所有书签");
+  LOG_TAG_NS("BookmarkControl", "折叠所有书签");
   [self.outline collapseItem:nil collapseChildren:YES];
 
   // 延迟更新滚动条，确保折叠动画完成
@@ -2360,12 +2297,12 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
     return nil;
   }
 
-  NSLog(@"[BookmarkSearch] 搜索页面 %d，检查节点: %@ (页面: %d)", pageIndex,
-        node.title, node.pageIndex);
+  LOG_TAG_NS("BookmarkSearch", "搜索页面 %d，检查节点: %@ (页面: %d)",
+pageIndex, node.title, node.pageIndex);
 
   // 检查当前节点是否精确匹配
   if (node.pageIndex == pageIndex) {
-    NSLog(@"[BookmarkSearch] 找到精确匹配: %@", node.title);
+    LOG_TAG_NS("BookmarkSearch", "找到精确匹配: %@", node.title);
     return node;
   }
 
@@ -2373,7 +2310,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   TocNode* bestMatch = nil;
   if (node.pageIndex >= 0 && node.pageIndex <= pageIndex) {
     bestMatch = node;
-    NSLog(@"[BookmarkSearch] 当前最佳匹配: %@ (页面: %d)", bestMatch.title,
+    LOG_TAG_NS("BookmarkSearch", "当前最佳匹配: %@ (页面: %d)", bestMatch.title,
           bestMatch.pageIndex);
   }
 
@@ -2383,14 +2320,14 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
     if (childMatch) {
       // 如果找到精确匹配，直接返回
       if (childMatch.pageIndex == pageIndex) {
-        NSLog(@"[BookmarkSearch] 子节点中找到精确匹配: %@", childMatch.title);
-        return childMatch;
+        LOG_TAG_NS("BookmarkSearch", "子节点中找到精确匹配: %@",
+childMatch.title); return childMatch;
       }
       // 否则选择页面索引更接近的那个
       if (!bestMatch || childMatch.pageIndex > bestMatch.pageIndex) {
         bestMatch = childMatch;
-        NSLog(@"[BookmarkSearch] 更新最佳匹配: %@ (页面: %d)", bestMatch.title,
-              bestMatch.pageIndex);
+        LOG_TAG_NS("BookmarkSearch", "更新最佳匹配: %@ (页面: %d)",
+bestMatch.title, bestMatch.pageIndex);
       }
     }
   }
@@ -2400,18 +2337,18 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
 
 - (void)highlightCurrentBookmark {
   if (!self.tocRoot || !self.view) {
-    NSLog(@"[BookmarkHighlight] tocRoot或view为空，跳过高亮");
+    LOG_TAG_NS("BookmarkHighlight", "tocRoot或view为空，跳过高亮");
     return;
   }
 
   int currentPage = [self.view currentPageIndex];
-  NSLog(@"[BookmarkHighlight] 当前页面: %d", currentPage);
+  LOG_TAG_NS("BookmarkHighlight", "当前页面: %d", currentPage);
 
   // 查找对应的书签
   TocNode* targetBookmark = [self findBookmarkForPage:currentPage
                                                inNode:self.tocRoot];
   if (targetBookmark) {
-    NSLog(@"[BookmarkHighlight] 找到匹配书签: %@ (页面 %d)",
+    LOG_TAG_NS("BookmarkHighlight", "找到匹配书签: %@ (页面 %d)",
           targetBookmark.title, targetBookmark.pageIndex);
 
     // 确保书签的父节点都是展开的，这样才能看到目标书签
@@ -2436,12 +2373,12 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
             [self ensureBookmarkScrollBarVisible];
           }];
 
-      NSLog(@"[BookmarkHighlight] 书签已高亮，行号: %ld", (long)row);
+      LOG_TAG_NS("BookmarkHighlight", "书签已高亮，行号: %ld", (long)row);
     } else {
-      NSLog(@"[BookmarkHighlight] 无法找到书签对应的行，可能书签被折叠了");
+      LOG_TAG_NS("BookmarkHighlight", "无法找到书签对应的行，可能书签被折叠了");
     }
   } else {
-    NSLog(@"[BookmarkHighlight] 未找到匹配的书签");
+    LOG_TAG_NS("BookmarkHighlight", "未找到匹配的书签");
     // 清除选择
     [self.outline deselectAll:nil];
   }
@@ -2460,7 +2397,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   for (TocNode* parent in parentPath) {
     if (parent != self.tocRoot) {  // 不展开根节点
       [self.outline expandItem:parent];
-      NSLog(@"[BookmarkHighlight] 展开父节点: %@", parent.title);
+      LOG_TAG_NS("BookmarkHighlight", "展开父节点: %@", parent.title);
     }
   }
 }
@@ -2493,7 +2430,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
 }
 
 - (void)createExpandedBookmarkControls {
-  NSLog(@"[BookmarkControl] 创建展开状态的书签控件");
+  LOG_TAG_NS("BookmarkControl", "创建展开状态的书签控件");
 
   // 完全隐藏收起状态的控制栏，确保不会阻挡事件
   self.bookmarkControlBar.hidden = YES;
@@ -2503,7 +2440,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   // 创建顶部控制栏（包含标题、+/-按钮）
   CGFloat expandedWidth = self.leftPanel.bounds.size.width;  // 使用实际面板宽度
   CGFloat controlBarY = self.leftPanel.bounds.size.height - kControlBarHeight;
-  NSLog(@"[ScrollDebug] 创建expandedTopControlBar: width=%.1f, y=%.1f, "
+  LOG_TAG_NS("ScrollDebug", "创建expandedTopControlBar: width=%.1f, y=%.1f, "
         @"leftPanel.bounds=%@",
         expandedWidth, controlBarY, NSStringFromRect(self.leftPanel.bounds));
 
@@ -2547,7 +2484,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   expandAllButton.target = self;
   expandAllButton.action = @selector(expandAllBookmarks:);
   [self.expandedTopControlBar addSubview:expandAllButton];
-  NSLog(@"[BookmarkControl] +按钮创建: frame=%@, superview=%@",
+  LOG_TAG_NS("BookmarkControl", "+按钮创建: frame=%@, superview=%@",
         NSStringFromRect(expandAllButton.frame), expandAllButton.superview);
 
   // 添加折叠所有按钮（-）
@@ -2559,7 +2496,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   collapseAllButton.target = self;
   collapseAllButton.action = @selector(collapseAllBookmarks:);
   [self.expandedTopControlBar addSubview:collapseAllButton];
-  NSLog(@"[BookmarkControl] -按钮创建: frame=%@, superview=%@",
+  LOG_TAG_NS("BookmarkControl", "-按钮创建: frame=%@, superview=%@",
         NSStringFromRect(collapseAllButton.frame), collapseAllButton.superview);
 
   // 添加展开状态的收起按钮（位于右侧边缘）
@@ -2577,32 +2514,31 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   collapseButton.action = @selector(toggleBookmarkVisibility:);
   collapseButton.autoresizingMask = NSViewMinXMargin;  // 右对齐，随面板宽度调整
   [self.expandedTopControlBar addSubview:collapseButton];
-  NSLog(
-      @"[BookmarkControl] ◀按钮创建: frame=%@, expandedTopControlBar.bounds=%@",
-      NSStringFromRect(collapseButton.frame),
+  LOG_TAG_NS("BookmarkControl", "◀按钮创建: frame=%@,
+expandedTopControlBar.bounds=%@", NSStringFromRect(collapseButton.frame),
       NSStringFromRect(self.expandedTopControlBar.bounds));
 
   [self.leftPanel addSubview:self.expandedTopControlBar];
-  NSLog(@"[BookmarkControl] expandedTopControlBar创建: frame=%@, "
+  LOG_TAG_NS("BookmarkControl", "expandedTopControlBar创建: frame=%@, "
         @"leftPanel.bounds=%@",
         NSStringFromRect(self.expandedTopControlBar.frame),
         NSStringFromRect(self.leftPanel.bounds));
 
   // 显示书签列表
-  NSLog(@"[ScrollDebug] 准备显示书签列表，设置 outlineScroll.hidden = NO");
-  NSLog(@"[ScrollDebug] 显示前 outlineScroll frame: %@",
+  LOG_TAG_NS("ScrollDebug", "准备显示书签列表，设置 outlineScroll.hidden = NO");
+  LOG_TAG_NS("ScrollDebug", "显示前 outlineScroll frame: %@",
         NSStringFromRect(self.outlineScroll.frame));
-  NSLog(@"[ScrollDebug] 显示前 leftPanel bounds: %@",
+  LOG_TAG_NS("ScrollDebug", "显示前 leftPanel bounds: %@",
         NSStringFromRect(self.leftPanel.bounds));
 
   self.outlineScroll.hidden = NO;
 
-  NSLog(@"[ScrollDebug] 显示后 outlineScroll hidden: %@",
+  LOG_TAG_NS("ScrollDebug", "显示后 outlineScroll hidden: %@",
         self.outlineScroll.hidden ? @"YES" : @"NO");
 
   // 立即检查滚动条状态
   dispatch_async(dispatch_get_main_queue(), ^{
-    NSLog(@"[ScrollDebug] 异步检查滚动条状态...");
+    LOG_TAG_NS("ScrollDebug", "异步检查滚动条状态...");
 
     // 首先确保左侧面板和滚动视图尺寸正确
     [self ensureLeftPanelSize];
@@ -2618,7 +2554,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
 }
 
 - (void)removeExpandedBookmarkControls {
-  NSLog(@"[BookmarkControl] 移除展开状态的书签控件");
+  LOG_TAG_NS("BookmarkControl", "移除展开状态的书签控件");
 
   // 移除顶部控制栏
   if (self.expandedTopControlBar) {
@@ -2636,36 +2572,36 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
 }
 
 - (void)updateStatusBar {
-  NSLog(@"[StatusBar] updateStatusBar被调用");
+  LOG_TAG_NS("StatusBar", "updateStatusBar被调用");
 
   @try {
-    NSLog(@"[StatusBar] 检查self.view...");
+    LOG_TAG_NS("StatusBar", "检查self.view...");
     if (!self.view) {
-      NSLog(@"[StatusBar] self.view为nil");
+      LOG_TAG_NS("StatusBar", "self.view为nil");
       return;
     }
-    NSLog(@"[StatusBar] self.view: %@", self.view);
+    LOG_TAG_NS("StatusBar", "self.view: %@", self.view);
 
-    NSLog(@"[StatusBar] 检查document...");
+    LOG_TAG_NS("StatusBar", "检查document...");
     FPDF_DOCUMENT doc = [self.view document];
-    NSLog(@"[StatusBar] document: %p", doc);
+    LOG_TAG_NS("StatusBar", "document: %p", doc);
 
-    NSLog(@"[StatusBar] 检查状态栏组件...");
-    NSLog(@"[StatusBar] statusBar: %@", self.statusBar);
-    NSLog(@"[StatusBar] pageInput: %@", self.pageInput);
-    NSLog(@"[StatusBar] totalPagesLabel: %@", self.totalPagesLabel);
-    NSLog(@"[StatusBar] prevPageButton: %@", self.prevPageButton);
-    NSLog(@"[StatusBar] nextPageButton: %@", self.nextPageButton);
+    LOG_TAG_NS("StatusBar", "检查状态栏组件...");
+    LOG_TAG_NS("StatusBar", "statusBar: %@", self.statusBar);
+    LOG_TAG_NS("StatusBar", "pageInput: %@", self.pageInput);
+    LOG_TAG_NS("StatusBar", "totalPagesLabel: %@", self.totalPagesLabel);
+    LOG_TAG_NS("StatusBar", "prevPageButton: %@", self.prevPageButton);
+    LOG_TAG_NS("StatusBar", "nextPageButton: %@", self.nextPageButton);
 
     // 检查状态栏组件是否已初始化
     if (!self.statusBar || !self.pageInput || !self.totalPagesLabel ||
         !self.prevPageButton || !self.nextPageButton) {
-      NSLog(@"[StatusBar] 状态栏组件未初始化，跳过更新");
+      LOG_TAG_NS("StatusBar", "状态栏组件未初始化，跳过更新");
       return;
     }
 
     if (!doc) {
-      NSLog(@"[StatusBar] 没有文档，设置默认值");
+      LOG_TAG_NS("StatusBar", "没有文档，设置默认值");
       self.pageInput.stringValue = @"1";
       self.totalPagesLabel.stringValue = @"/ 0";
       self.prevPageButton.enabled = NO;
@@ -2673,13 +2609,13 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
       return;
     }
 
-    NSLog(@"[StatusBar] 获取页面信息...");
+    LOG_TAG_NS("StatusBar", "获取页面信息...");
     int currentPage = [self.view currentPageIndex] + 1;  // 显示从1开始的页码
     int totalPages = FPDF_GetPageCount(doc);
 
-    NSLog(@"[StatusBar] 当前页: %d, 总页数: %d", currentPage, totalPages);
+    LOG_TAG_NS("StatusBar", "当前页: %d, 总页数: %d", currentPage, totalPages);
 
-    NSLog(@"[StatusBar] 更新UI组件...");
+    LOG_TAG_NS("StatusBar", "更新UI组件...");
     self.pageInput.stringValue = [NSString stringWithFormat:@"%d", currentPage];
     self.totalPagesLabel.stringValue =
         [NSString stringWithFormat:@"/ %d", totalPages];
@@ -2687,10 +2623,10 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
     self.prevPageButton.enabled = (currentPage > 1);
     self.nextPageButton.enabled = (currentPage < totalPages);
 
-    NSLog(@"[StatusBar] 状态栏更新完成: %@ %@", self.pageInput.stringValue,
+    LOG_TAG_NS("StatusBar", "状态栏更新完成: %@ %@", self.pageInput.stringValue,
           self.totalPagesLabel.stringValue);
   } @catch (NSException* exception) {
-    NSLog(@"[StatusBar] 异常: %@", exception);
+    LOG_TAG_NS("StatusBar", "异常: %@", exception);
   }
 }
 
@@ -2730,17 +2666,16 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   int validPageNum = pageNum;
   if (pageNum < 1) {
     validPageNum = 1;  // 小于最小值时使用最小值
-    NSLog(@"[PageNavigation] 状态栏输入页码%d小于1，调整为最小值: %d", pageNum,
-          validPageNum);
-  } else if (pageNum > totalPages) {
-    validPageNum = totalPages;  // 大于最大值时使用最大值
-    NSLog(@"[PageNavigation] 状态栏输入页码%d超过最大值%d，调整为最大值: %d",
-          pageNum, totalPages, validPageNum);
+    LOG_TAG_NS("PageNavigation", "状态栏输入页码%d小于1，调整为最小值: %d",
+pageNum, validPageNum); } else if (pageNum > totalPages) { validPageNum =
+totalPages;  // 大于最大值时使用最大值 LOG_TAG_NS("PageNavigation",
+"状态栏输入页码%d超过最大值%d，调整为最大值: %d", pageNum, totalPages,
+validPageNum);
   }
 
   // 应用有效的页码
   [self.view goToPage:validPageNum - 1];  // 转换为0开始的索引
-  NSLog(@"[PageNavigation] 状态栏页码设置为: %d (索引: %d)", validPageNum,
+  LOG_TAG_NS("PageNavigation", "状态栏页码设置为: %d (索引: %d)", validPageNum,
         validPageNum - 1);
   [self updateStatusBar];
 }
@@ -2753,11 +2688,11 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
 @implementation AppDelegate (PdfViewDelegate)
 
 - (void)pdfViewDidChangePage:(id)sender {
-  NSLog(@"[StatusBar] pdfViewDidChangePage被调用");
+  LOG_TAG_NS("StatusBar", "pdfViewDidChangePage被调用");
   if (self.statusBar) {
     [self updateStatusBar];
   } else {
-    NSLog(@"[StatusBar] 状态栏尚未初始化，跳过更新");
+    LOG_TAG_NS("StatusBar", "状态栏尚未初始化，跳过更新");
   }
 
   // 高亮当前书签
@@ -2767,12 +2702,105 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   [self updateInspectorContent];
 }
 
+- (void)pdfView:(id)sender
+    didFinishLoadingDocument:(BOOL)success
+                       error:(NSError*)error {
+  if (!success) {
+    // 加载失败
+    if (error) {
+      LOG_ERROR_F("PDF 文档加载失败：%s",
+                  [[error localizedDescription] UTF8String]);
+
+      // 如果不是用户取消，显示错误提示
+      if (error.code != 2) {  // 2 = 用户取消
+        NSAlert* alert = [NSAlert new];
+        alert.messageText = @"无法打开 PDF";
+        alert.informativeText = error.localizedDescription;
+        [alert runModal];
+      } else {
+        LOG_INFO("用户取消了文档加载");
+      }
+    }
+    return;
+  }
+
+  // 加载成功，执行UI初始化
+  MacLog_DebugNS(@"[StatusBar] PDF文件加载成功，准备更新状态栏");
+  LOG_INFO("PDF 文件加载成功，开始初始化界面");
+
+  MacLog_DebugNS(@"[OpenFile] 调用 rebuildToc");
+  [self rebuildToc];
+
+  MacLog_DebugNS(@"[OpenFile] 设置 first responder");
+  [self.window makeFirstResponder:self.view];
+
+  // 更新状态栏显示
+  MacLog_DebugNS(
+      [NSString stringWithFormat:@"[OpenFile] 更新状态栏，statusBar = %@",
+                                 self.statusBar]);
+  if (self.statusBar) {
+    [self updateStatusBar];
+  } else {
+    MacLog_DebugNS(@"[StatusBar] 状态栏尚未初始化，跳过更新");
+  }
+
+  // 高亮当前书签
+  MacLog_DebugNS(@"[OpenFile] 高亮书签");
+  [self highlightCurrentBookmark];
+
+  // 先调整窗口大小
+  NSSize s = [self.view currentPageSizePt];
+  MacLog_DebugNS(
+      [NSString stringWithFormat:@"[OpenFile] 当前页面大小：%.0f x %.0f",
+                                 s.width, s.height]);
+  CGFloat newW = MIN(MAX(800, s.width + 300), 1600);
+  CGFloat newH = MIN(MAX(600, s.height + 120), 1200);
+  NSRect f = self.window.frame;
+  f.size = NSMakeSize(newW, newH);
+  [self.window setFrame:f display:NO animate:NO];
+  LOG_DEBUG_F("窗口大小调整为：%.0f x %.0f", newW, newH);
+
+  // 更新视图尺寸
+  MacLog_DebugNS(@"[OpenFile] 调用 updateViewSizeToFitPage");
+  [self.view updateViewSizeToFitPage];
+  MacLog_DebugNS([NSString
+      stringWithFormat:
+          @"[OpenFile] PdfView frame after updateViewSizeToFitPage: %@",
+          NSStringFromRect(self.view.frame)]);
+
+  // 更新窗口标题
+  NSString* currentPath = self.view.currentPath;
+  if (currentPath) {
+    self.window.title = [NSString
+        stringWithFormat:@"PdfWinViewer - %@", currentPath.lastPathComponent];
+
+    // 写入最近文件列表
+    [self addRecentPath:currentPath];
+    LOG_TAG_NS("PdfWinViewer", "after addRecentPath, recent count=%lu",
+               (unsigned long)self.recentPaths.count);
+    LOG_DEBUG_F("已添加到最近文件列表，当前列表数量：%lu",
+                (unsigned long)self.recentPaths.count);
+  }
+
+  // 启用"导出当前页为 PNG"
+  NSMenu* fileMenu = [[[NSApp mainMenu] itemWithTitle:@"文件"] submenu];
+  NSMenuItem* exp = [fileMenu itemWithTag:9901];
+  if (exp) {
+    [exp setEnabled:YES];
+  }
+
+  LOG_INFO_F(
+      "文件打开完成：%s",
+      currentPath ? [[currentPath lastPathComponent] UTF8String] : "unknown");
+  LOG_INFO_F("========================================");
+}
+
 @end
 
 #pragma mark - 检查器面板相关方法 - 已迁移到InspectorPanelController
 /*
 - (void)createInspectorPanel {
-  NSLog(@"[Inspector] 开始创建检查器面板");
+  LOG_TAG_NS("Inspector", "开始创建检查器面板");
 
   // 创建检查器面板容器
   self.inspectorPanel = [[NSView alloc]
@@ -2867,7 +2895,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
               action:@selector(inspectorTextViewClicked:)];
   [self.inspectorTextView addGestureRecognizer:clickGesture];
 
-  NSLog(@"[Inspector] 文本视图自动换行配置完成，容器宽度: %.1f",
+  LOG_TAG_NS("Inspector", "文本视图自动换行配置完成，容器宽度: %.1f",
         textFrame.size.width);
 
   // 创建滚动视图
@@ -2879,11 +2907,11 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
       NSViewWidthSizable | NSViewHeightSizable;
   [self.inspectorPanel addSubview:self.inspectorScrollView];
 
-  NSLog(@"[Inspector] 检查器面板创建完成");
+  LOG_TAG_NS("Inspector", "检查器面板创建完成");
 }
 
 - (void)toggleInspectorVisibility:(id)sender {
-  NSLog(@"[Inspector] 切换检查器可见性，当前状态: %@",
+  LOG_TAG_NS("Inspector", "切换检查器可见性，当前状态: %@",
         self.inspectorVisible ? @"可见" : @"隐藏");
   [self setInspectorVisible:!self.inspectorVisible animated:YES];
 }
@@ -2894,7 +2922,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   }
 
   self.inspectorVisible = visible;
-  NSLog(@"[Inspector] 设置检查器可见性: %@", visible ? @"显示" : @"隐藏");
+  LOG_TAG_NS("Inspector", "设置检查器可见性: %@", visible ? @"显示" : @"隐藏");
 
   // 更新按钮文本
   //
@@ -2931,7 +2959,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
     [rightSplit setPosition:newPosition ofDividerAtIndex:0];
     [rightSplit layoutSubtreeIfNeeded];
 
-    NSLog(@"[Inspector] 检查器面板展开，frame: %@",
+    LOG_TAG_NS("Inspector", "检查器面板展开，frame: %@",
           NSStringFromRect(self.inspectorPanel.frame));
 
     // 更新面板布局和内容
@@ -2941,7 +2969,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
     // 收起：完全隐藏检查器面板
     CGFloat collapsedPosition = self.rightPanel.bounds.size.width;
 
-    NSLog(@"[Inspector] 收起检查器，rightPanel宽度: %.1f, 目标位置: %.1f",
+    LOG_TAG_NS("Inspector", "收起检查器，rightPanel宽度: %.1f, 目标位置: %.1f",
           self.rightPanel.bounds.size.width, collapsedPosition);
 
     // 设置位置，让 PDF 内容占满
@@ -2957,7 +2985,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
       [rightSplit adjustSubviews];
     }
 
-    NSLog(@"[Inspector] 检查器收起完成，pdfContentView frame: %@, "
+    LOG_TAG_NS("Inspector", "检查器收起完成，pdfContentView frame: %@, "
           @"inspectorPanel frame: %@, 按钮 frame: %@",
           NSStringFromRect(self.pdfContentView.frame),
           NSStringFromRect(self.inspectorPanel.frame),
@@ -2978,7 +3006,7 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
       NSMakeSize(newWidth, CGFLOAT_MAX);
   [self.inspectorTextView setNeedsDisplay:YES];
 
-  NSLog(@"[Inspector] 文本容器宽度已更新为: %.1f", newWidth);
+  LOG_TAG_NS("Inspector", "文本容器宽度已更新为: %.1f", newWidth);
 }
 
 // 递归显示对象树节点
@@ -3161,13 +3189,13 @@ updateViewSizeToFitPage: %@", NSStringFromRect(self.view.frame)]);
   // 更新文本视图
   dispatch_async(dispatch_get_main_queue(), ^{
     [self.inspectorTextView.textStorage setAttributedString:attributedInfo];
-    NSLog(@"[Inspector] 检查器内容已更新，页面 %d", currentPage + 1);
+    LOG_TAG_NS("Inspector", "检查器内容已更新，页面 %d", currentPage + 1);
   });
 }
 
 // 处理显示窗口通知（用于单实例功能）
 - (void)handleShowWindowNotification:(NSNotification*)notification {
-  NSLog(@"[PdfWinViewer] 收到显示窗口通知，激活应用并显示窗口");
+  LOG_TAG_NS("PdfWinViewer", "收到显示窗口通知，激活应用并显示窗口");
   dispatch_async(dispatch_get_main_queue(), ^{
     [NSApp activateIgnoringOtherApps:YES];
     if (self.window) {
@@ -3262,8 +3290,9 @@ int main(int argc, const char* argv[]) {
           existingApp.processIdentifier);
       LOG_INFO_F("检测到已有实例运行（PID: %d），激活现有窗口并退出",
                  existingApp.processIdentifier);
-      NSLog(@"[PdfWinViewer] 检测到已有实例运行（PID: %d），激活现有窗口并退出",
-            existingApp.processIdentifier);
+      LOG_TAG_NS("PdfWinViewer",
+                 "检测到已有实例运行（PID: %d），激活现有窗口并退出",
+                 existingApp.processIdentifier);
 
       // 激活现有实例
       [existingApp activateWithOptions:NSApplicationActivateIgnoringOtherApps];

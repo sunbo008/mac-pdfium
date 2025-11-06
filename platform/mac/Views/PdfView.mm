@@ -5,6 +5,7 @@
 //
 
 #import "PdfView.h"
+#import "LoadingView.h"
 #include <chrono>
 #include <vector>
 #import "../Utils/LogManager.h"
@@ -44,7 +45,7 @@ static inline void LogFPDFLastError(const char* where) {
     default:
       break;
   }
-  NSLog(@"[PdfWinViewer] PDFium error at %s: %lu (%@)", where, code,
+  LOG_TAG_NS("PdfWinViewer", "PDFium error at %s: %lu (%@)", where, code,
         [NSString stringWithUTF8String:msg]);
 }
 
@@ -66,6 +67,18 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   NSPoint _selEnd;
   NSPoint _lastContextPt;  // 最近一次右键菜单触发位置（视图坐标）
   BOOL _lastContextHitImage;  // 最近一次右键是否命中图片
+  
+  // 异步加载相关
+  BOOL _isLoading;  // 是否正在加载
+  BOOL _shouldCancelLoading;  // 是否应该取消加载
+  LoadingView* _loadingView;  // 加载视图
+  NSString* _loadingPath;  // 正在加载的文件路径
+  NSString* _currentPath;  // 当前打开的文件路径
+  dispatch_queue_t _loadingQueue;  // 加载队列
+}
+
+- (NSString*)currentPath {
+  return _currentPath;
 }
 - (NSPoint)toPagePxFromView:(NSPoint)viewPt {
   // Convert view coordinates to page coordinates (in points)
@@ -125,6 +138,10 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     _pageIndex = 0;
     _zoom = 1.0;
     _selecting = false;
+    _isLoading = NO;
+    _shouldCancelLoading = NO;
+    _loadingQueue = dispatch_queue_create("com.pdfwinviewer.loading",
+                                          DISPATCH_QUEUE_SERIAL);
     [self.window setAcceptsMouseMovedEvents:YES];
   }
   return self;
@@ -135,17 +152,27 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 }
 
 - (BOOL)openPDFAtPath:(NSString*)path {
-  NSLog(@"[PdfWinViewer] openPDFAtPath: %@", path);
+  // 默认行为：根据文件大小自动决定是否显示加载视图
+  NSDictionary* attrs =
+      [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+  unsigned long long fileSize = attrs ? [attrs fileSize] : 0;
+  BOOL showLoading = (fileSize >= 5 * 1024 * 1024);  // 5MB 以上显示
+  return [self openPDFAtPath:path showLoadingView:showLoading];
+}
 
-  // 记录开始时间
-  auto startTime = std::chrono::steady_clock::now();
+- (BOOL)openPDFAtPath:(NSString*)path showLoadingView:(BOOL)showLoading {
+  if (_isLoading) {
+    LOG_WARNING("已有文档正在加载中，忽略新的加载请求");
+    return NO;
+  }
 
-  // 使用新日志模块记录打开文件
+  LOG_TAG_NS("PdfWinViewer", "openPDFAtPath (async): %@", path);
   LOG_INFO_F("========================================");
   LOG_INFO_F("正在打开 PDF 文件：%s", [path UTF8String]);
   LOG_DEBUG_F("文件完整路径：%s", [path UTF8String]);
   LOG_DEBUG_F("文件名：%s", [[path lastPathComponent] UTF8String]);
 
+  // 关闭之前的文档
   if (_doc) {
     LOG_DEBUG("关闭之前打开的文档");
     FPDF_CloseDocument(_doc);
@@ -153,48 +180,170 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     _pageIndex = 0;
     _zoom = 1.0;
   }
-  std::string u8 = NSStringToUTF8(path);
+
+  // 设置加载状态
+  _isLoading = YES;
+  _shouldCancelLoading = NO;
+  _loadingPath = [path copy];
+
+  // 显示加载视图
+  if (showLoading) {
+    if (!_loadingView) {
+      _loadingView = [[LoadingView alloc] initWithFrame:self.bounds];
+      _loadingView.autoresizingMask =
+          NSViewWidthSizable | NSViewHeightSizable;
+      __weak PdfView* weakSelf = self;
+      _loadingView.onCancel = ^{
+        [weakSelf cancelLoading];
+      };
+    }
+    _loadingView.frame = self.bounds;
+    [self addSubview:_loadingView];
+    [_loadingView show];
+  }
+
+  // 异步加载文档
+  NSString* pathCopy = [path copy];
+  dispatch_async(_loadingQueue, ^{
+    [self loadDocumentInBackground:pathCopy showLoading:showLoading];
+  });
+
+  return YES;
+}
+
+- (void)loadDocumentInBackground:(NSString*)path showLoading:(BOOL)showLoading {
+  auto startTime = std::chrono::steady_clock::now();
+
+  // 初始化PDFium库
   FPDF_LIBRARY_CONFIG cfg{};
   cfg.version = 3;
   FPDF_InitLibraryWithConfig(&cfg);
 
-  LOG_DEBUG("调用 FPDF_LoadDocument");
+  LOG_DEBUG("调用 FPDF_LoadDocument（后台线程）");
   auto loadStartTime = std::chrono::steady_clock::now();
-  _doc = FPDF_LoadDocument(u8.c_str(), nullptr);
-  auto loadEndTime = std::chrono::steady_clock::now();
 
-  if (!_doc) {
-    LOG_ERROR_F("打开 PDF 文件失败：%s", [path UTF8String]);
-    LogFPDFLastError("FPDF_LoadDocument");
-    return NO;
+  std::string u8 = NSStringToUTF8(path);
+  FPDF_DOCUMENT doc = FPDF_LoadDocument(u8.c_str(), nullptr);
+
+  // 检查是否被取消
+  if (_shouldCancelLoading) {
+    LOG_INFO("文档加载已取消");
+    if (doc) {
+      FPDF_CloseDocument(doc);
+    }
+    [self finishLoadingWithDocument:nil
+                               path:path
+                          startTime:startTime
+                      loadStartTime:loadStartTime
+                       showLoading:showLoading
+                          cancelled:YES];
+    return;
   }
 
+  auto loadEndTime = std::chrono::steady_clock::now();
   double loadTimeMs =
       std::chrono::duration<double, std::milli>(loadEndTime - loadStartTime)
           .count();
 
-  int pc = FPDF_GetPageCount(_doc);
+  if (!doc) {
+    LOG_ERROR_F("打开 PDF 文件失败：%s", [path UTF8String]);
+    LogFPDFLastError("FPDF_LoadDocument");
+    [self finishLoadingWithDocument:nil
+                               path:path
+                          startTime:startTime
+                      loadStartTime:loadStartTime
+                       showLoading:showLoading
+                          cancelled:NO];
+    return;
+  }
 
-  // 计算总耗时
+  int pageCount = FPDF_GetPageCount(doc);
   auto endTime = std::chrono::steady_clock::now();
   double totalTimeMs =
       std::chrono::duration<double, std::milli>(endTime - startTime).count();
 
-  LOG_INFO_F("PDF 文件打开成功，共 %d 页", pc);
+  LOG_INFO_F("PDF 文件打开成功，共 %d 页", pageCount);
   LOG_INFO_F("⏱️  文档加载耗时：%.2f ms（FPDF_LoadDocument: %.2f ms）",
              totalTimeMs, loadTimeMs);
-  NSLog(@"[PdfWinViewer] document loaded. pageCount=%d", pc);
-// 首次渲染计时起点（只要编译时启用日志就记录，运行时再判断是否输出）
+  LOG_TAG_NS("PdfWinViewer", "document loaded. pageCount=%d", pageCount);
+
+  // 回到主线程更新UI
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (_shouldCancelLoading) {
+      LOG_INFO("文档加载完成但已被取消");
+      FPDF_CloseDocument(doc);
+      [self finishLoadingWithDocument:nil
+                                 path:path
+                            startTime:startTime
+                        loadStartTime:loadStartTime
+                         showLoading:showLoading
+                            cancelled:YES];
+      return;
+    }
+
+    _doc = doc;
+    _pageIndex = 0;
+    _zoom = 1.0;
+    _currentPath = [path copy];  // 保存当前文件路径
+
 #if PDFWV_ENABLE_LOGGING
-  _openStartSec = NowSeconds();
-  _firstRenderAfterOpen = true;
-  _lastMemMB = GetProcessMemMB();
+    _openStartSec = NowSeconds();
+    _firstRenderAfterOpen = true;
+    _lastMemMB = GetProcessMemMB();
 #endif
-  // 不在这里调用 updateViewSizeToFitPage，因为 setFrameSize 会触发 drawRect
-  // 移到 openPathAndAdjust 中，在窗口调整前调用，实现只渲染一次
-  // [self updateViewSizeToFitPage];
-  // [self setNeedsDisplay:YES];
-  return YES;
+
+    [self finishLoadingWithDocument:doc
+                               path:path
+                          startTime:startTime
+                      loadStartTime:loadStartTime
+                       showLoading:showLoading
+                          cancelled:NO];
+  });
+}
+
+- (void)finishLoadingWithDocument:(FPDF_DOCUMENT)doc
+                             path:(NSString*)path
+                        startTime:(std::chrono::steady_clock::time_point)startTime
+                    loadStartTime:(std::chrono::steady_clock::time_point)loadStartTime
+                     showLoading:(BOOL)showLoading
+                        cancelled:(BOOL)cancelled {
+  // 隐藏加载视图
+  if (showLoading && _loadingView) {
+    [_loadingView hide];
+    [_loadingView removeFromSuperview];
+  }
+
+  _isLoading = NO;
+  _shouldCancelLoading = NO;
+  _loadingPath = nil;
+
+  // 通知delegate
+  if ([self.delegate
+          respondsToSelector:@selector(pdfView:didFinishLoadingDocument:error:)]) {
+    NSError* error = nil;
+    if (!doc && !cancelled) {
+      error = [NSError errorWithDomain:@"PdfViewErrorDomain"
+                                  code:1
+                              userInfo:@{
+                                NSLocalizedDescriptionKey : @"无法加载PDF文档"
+                              }];
+    } else if (cancelled) {
+      error = [NSError errorWithDomain:@"PdfViewErrorDomain"
+                                  code:2
+                              userInfo:@{
+                                NSLocalizedDescriptionKey : @"用户取消加载"
+                              }];
+    }
+    [self.delegate pdfView:self didFinishLoadingDocument:(doc != nullptr) error:error];
+  }
+}
+
+- (void)cancelLoading {
+  if (!_isLoading) {
+    return;
+  }
+  LOG_INFO("用户请求取消加载");
+  _shouldCancelLoading = YES;
 }
 
 - (NSSize)currentPageSizePt {
@@ -216,11 +365,21 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 }
 
 - (void)keyDown:(NSEvent*)event {
+  NSString* chars = [event charactersIgnoringModifiers];
+  unichar c = chars.length ? [chars characterAtIndex:0] : 0;
+  
+  // ESC 键取消加载
+  if (c == 0x1B) {  // ESC key
+    if (_isLoading) {
+      [self cancelLoading];
+      return;
+    }
+  }
+  
   if (!_doc) {
     return;
   }
-  NSString* chars = [event charactersIgnoringModifiers];
-  unichar c = chars.length ? [chars characterAtIndex:0] : 0;
+  
   NSEventModifierFlags mods =
       event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
   if ((mods & NSEventModifierFlagCommand) != 0) {
@@ -635,7 +794,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                  @"pageXY=(%.1f,%.1f) hitImage=%@",
                                  _doc ? @"YES" : @"NO", _pageIndex, pt.x, pt.y,
                                  px, py, hitImage ? @"YES" : @"NO"];
-  NSLog(@"[PdfWinViewer] %@", ctxLine);
+  LOG_TAG_NS("PdfWinViewer", "%@", ctxLine);
   MacLog_DebugNS(ctxLine);
   NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
   menu.autoenablesItems = NO;  // 禁用自动启用，手动控制菜单项状态
@@ -802,16 +961,16 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     // 边界检查：确保页码在有效范围内
     if (v < 1) {
       v = 1;  // 小于最小值时使用最小值
-      NSLog(@"[PageNavigation] 输入页码小于1，调整为最小值: %ld", (long)v);
+      LOG_TAG_NS("PageNavigation", "输入页码小于1，调整为最小值: %ld", (long)v);
     } else if (v > pc) {
       v = pc;  // 大于最大值时使用最大值
-      NSLog(@"[PageNavigation] 输入页码超过最大值%ld，调整为最大值: %ld",
+      LOG_TAG_NS("PageNavigation", "输入页码超过最大值%ld，调整为最大值: %ld",
             (long)pc, (long)v);
     }
 
     int oldIndex = _pageIndex;
     _pageIndex = (int)v - 1;  // 转换为0基索引
-    NSLog(@"[PageNavigation] 设置页码为: %ld (索引: %d)", (long)v, _pageIndex);
+    LOG_TAG_NS("PageNavigation", "设置页码为: %ld (索引: %d)", (long)v, _pageIndex);
     [self setNeedsDisplay:YES];
 
     if (oldIndex != _pageIndex &&
@@ -822,7 +981,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 }
 
 - (BOOL)exportCurrentPagePNG {
-  NSLog(@"[PdfWinViewer][exportPage] doc=%@ page=%d", _doc ? @"YES" : @"NO",
+  LOG_TAG_NS("PdfWinViewer", "[exportPage] doc=%@ page=%d", _doc ? @"YES" : @"NO",
         _pageIndex);
   if (!_doc) {
     return NO;
@@ -903,7 +1062,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   double px = pageXY.x, py = pageXY.y;
   double wpt = 0, hpt = 0;
   FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
-  NSLog(@"[PdfWinViewer][saveImage] use pt=(%.1f,%.1f) => pageXY=(%.1f,%.1f) "
+  LOG_TAG_NS("PdfWinViewer", "[saveImage] use pt=(%.1f,%.1f) => pageXY=(%.1f,%.1f) "
         @"pageWH=(%.1f,%.1f)",
         pt.x, pt.y, px, py, wpt, hpt);
   FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
@@ -918,7 +1077,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
           @"[saveImage] hit test: obj=%p, bounds=(%.1f,%.1f)-(%.1f,%.1f)", hit,
           hitResult.minx, hitResult.miny, hitResult.maxx, hitResult.maxy]);
   if (!hit) {
-    NSLog(@"[PdfWinViewer][saveImage] no image hit");
+    LOG_TAG_NS("PdfWinViewer", "[saveImage] no image hit");
     MacLog_DebugNS(@"[saveImage] no image found at coordinates");
     FPDF_ClosePage(page);
     return;
@@ -942,7 +1101,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                          w, h, stride, buf]);
   }
   if (!buf || w <= 0 || h <= 0) {
-    NSLog(@"[PdfWinViewer][saveImage] no bitmap available");
+    LOG_TAG_NS("PdfWinViewer", "[saveImage] no bitmap available");
     MacLog_DebugNS(@"[saveImage] bitmap acquisition failed");
     if (needDestroy && useBmp) {
       FPDFBitmap_Destroy(useBmp);
@@ -954,7 +1113,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   NSSavePanel* sp = [NSSavePanel savePanel];
   [sp setNameFieldStringValue:@"image.png"];
   NSInteger resp = [sp runModal];
-  NSLog(@"[PdfWinViewer][saveImage] save panel resp=%ld", (long)resp);
+  LOG_TAG_NS("PdfWinViewer", "[saveImage] save panel resp=%ld", (long)resp);
   if (resp != NSModalResponseOK) {
     if (needDestroy) { /* release rendered */
     }
@@ -1074,7 +1233,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
   FPDF_ClosePage(page);
 
-  NSLog(@"[PdfWinViewer][saveImage] save completed: %@, path: %@",
+  LOG_TAG_NS("PdfWinViewer", "[saveImage] save completed: %@, path: %@",
         saveSuccess ? @"SUCCESS" : @"FAILED", url.path);
   MacLog_DebugNS(
       [NSString stringWithFormat:@"[saveImage] final result: %@",
@@ -1097,7 +1256,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
   // 遍历页面上的所有对象
   int totalObjs = FPDFPage_CountObjects(page);
-  NSLog(@"[PdfView] 检测点击位置 (%.1f, %.1f)，页面共有 %d 个对象", px, py,
+  LOG_TAG_NS("PdfView", "检测点击位置 (%.1f, %.1f)，页面共有 %d 个对象", px, py,
         totalObjs);
 
   for (int i = 0; i < totalObjs; i++) {
@@ -1112,8 +1271,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       // 检查点击是否在对象边界内
       if (px >= left && px <= right && py >= bottom && py <= top) {
         int objType = FPDFPageObj_GetType(obj);
-        NSLog(
-            @"[PdfView] 点击命中对象 %d，类型: %d，边界: (%.1f,%.1f,%.1f,%.1f)",
+        LOG_TAG_NS("PdfView", "点击命中对象 %d，类型: %d，边界: (%.1f,%.1f,%.1f,%.1f)",
             i, objType, left, bottom, right, top);
 
         // 通知AppDelegate跳转到检查器中的对应对象
@@ -1137,20 +1295,20 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 // 文本查找功能
 - (BOOL)findText:(NSString*)searchText fromIndex:(NSNumber*)startIndex {
   if (!_doc || !searchText || searchText.length == 0) {
-    NSLog(@"[PdfView] 查找失败：无效的文档或搜索文本");
+    LOG_TAG_NS("PdfView", "查找失败：无效的文档或搜索文本");
     return NO;
   }
 
   FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
   if (!page) {
-    NSLog(@"[PdfView] 查找失败：无法加载页面 %d", _pageIndex);
+    LOG_TAG_NS("PdfView", "查找失败：无法加载页面 %d", _pageIndex);
     return NO;
   }
 
   // 加载文本页面
   FPDF_TEXTPAGE textPage = FPDFText_LoadPage(page);
   if (!textPage) {
-    NSLog(@"[PdfView] 查找失败：无法加载文本页面");
+    LOG_TAG_NS("PdfView", "查找失败：无法加载文本页面");
     FPDF_ClosePage(page);
     return NO;
   }
@@ -1161,13 +1319,13 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   FPDF_WIDESTRING wideString = (FPDF_WIDESTRING)utf16Data.bytes;
 
   int startIdx = startIndex ? [startIndex intValue] : 0;
-  NSLog(@"[PdfView] 开始查找文本: '%@'，起始索引: %d", searchText, startIdx);
+  LOG_TAG_NS("PdfView", "开始查找文本: '%@'，起始索引: %d", searchText, startIdx);
 
   // 开始搜索
   FPDF_SCHHANDLE searchHandle =
       FPDFText_FindStart(textPage, wideString, 0, startIdx);
   if (!searchHandle) {
-    NSLog(@"[PdfView] 查找失败：无法创建搜索句柄");
+    LOG_TAG_NS("PdfView", "查找失败：无法创建搜索句柄");
     FPDFText_ClosePage(textPage);
     FPDF_ClosePage(page);
     return NO;
@@ -1178,14 +1336,14 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   if (found) {
     int resultIndex = FPDFText_GetSchResultIndex(searchHandle);
     int resultCount = FPDFText_GetSchCount(searchHandle);
-    NSLog(@"[PdfView] 找到匹配文本，位置: %d，长度: %d", resultIndex,
+    LOG_TAG_NS("PdfView", "找到匹配文本，位置: %d，长度: %d", resultIndex,
           resultCount);
 
     // 获取匹配文本的边界框以便高亮显示
     double left, top, right, bottom;
     if (FPDFText_GetCharBox(textPage, resultIndex, &left, &bottom, &right,
                             &top)) {
-      NSLog(@"[PdfView] 匹配文本边界: (%.1f, %.1f, %.1f, %.1f)", left, bottom,
+      LOG_TAG_NS("PdfView", "匹配文本边界: (%.1f, %.1f, %.1f, %.1f)", left, bottom,
             right, top);
 
       // 将PDF坐标转换为视图坐标并滚动到可见区域
@@ -1198,7 +1356,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       [self setNeedsDisplay:YES];
     }
   } else {
-    NSLog(@"[PdfView] 未找到匹配的文本");
+    LOG_TAG_NS("PdfView", "未找到匹配的文本");
   }
 
   // 清理资源

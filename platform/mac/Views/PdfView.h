@@ -14,11 +14,19 @@
 @optional
 - (void)pdfViewDidChangePage:(id)sender;
 - (void)pdfViewDidClickObject:(NSValue*)objectValue atIndex:(NSNumber*)index;
+// 异步加载完成回调
+- (void)pdfView:(id)sender
+    didFinishLoadingDocument:(BOOL)success
+                       error:(NSError*)error;
 @end
 
 @interface PdfView : NSView
 @property(nonatomic, assign) id<PdfViewDelegate> delegate;
+@property(nonatomic, readonly) NSString* currentPath;  // 当前打开的文件路径
 - (BOOL)openPDFAtPath:(NSString*)path;
+- (BOOL)openPDFAtPath:(NSString*)path
+      showLoadingView:(BOOL)showLoading;  // 异步加载，可控制是否显示加载视图
+- (void)cancelLoading;  // 取消当前加载操作
 - (FPDF_DOCUMENT)document;
 - (void)goToPage:(int)index;
 - (int)currentPageIndex;          // 获取当前页索引（0开始）

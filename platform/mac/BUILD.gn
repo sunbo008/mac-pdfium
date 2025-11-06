@@ -36,6 +36,8 @@ if (is_mac) {
       "Views/DragDropView.mm",
       "Views/PdfView.h",
       "Views/PdfView.mm",
+      "Views/LoadingView.h",
+      "Views/LoadingView.mm",
       
       # Controllers
       "Controllers/RecentFilesManager.h",
