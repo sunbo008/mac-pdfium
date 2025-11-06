@@ -730,7 +730,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     int flags = FPDF_ANNOT | FPDF_LCD_TEXT;
     FPDF_RenderPageBitmap(bmp, page, 0, 0, pxW, pxH, 0, flags);
 
-    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGDataProviderRef dp = CGDataProviderCreateWithData(
         NULL, buffer.data(), (size_t)buffer.size(), NULL);
     CGBitmapInfo bi =
