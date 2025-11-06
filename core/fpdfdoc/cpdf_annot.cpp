@@ -30,6 +30,7 @@
 #include "core/fxge/cfx_graphstatedata.h"
 #include "core/fxge/cfx_path.h"
 #include "core/fxge/cfx_renderdevice.h"
+#include "platform/shared/logger.h"  // [AP-FORM-IMAGE-WATERMARK]
 
 namespace {
 
@@ -223,14 +224,24 @@ CPDF_Form* CPDF_Annot::GetAPForm(CPDF_Page* pPage, AppearanceMode mode) {
 
   auto it = ap_map_.find(pStream);
   if (it != ap_map_.end()) {
-    return it->second.get();
+    CPDF_Form* cached_form = it->second.get();
+    LOG_DEBUG_F(
+        "[AP-FORM-IMAGE-WATERMARK] GetAPForm: returning cached form %p, "
+        "IsAPForm=%s",
+        cached_form, (cached_form->IsAPForm() ? "true" : "false"));
+    return cached_form;
   }
 
   auto pNewForm = std::make_unique<CPDF_Form>(
       document_, pPage->GetMutableResources(), pStream);
+  pNewForm->SetIsAPForm(true);
   pNewForm->ParseContent();
 
   CPDF_Form* pResult = pNewForm.get();
+  LOG_INFO_F(
+      "[AP-FORM-IMAGE-WATERMARK] GetAPForm: created new AP-Form %p, "
+      "SetIsAPForm(true)",
+      pResult);
   ap_map_[pStream] = std::move(pNewForm);
   return pResult;
 }

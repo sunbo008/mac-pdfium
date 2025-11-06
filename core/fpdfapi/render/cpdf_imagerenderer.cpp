@@ -67,7 +67,14 @@ CPDF_ImageRenderer::CPDF_ImageRenderer(CPDF_RenderStatus* pStatus)
       // [AP-FORM-IMAGE-WATERMARK] 获取回调和标志
       image_callback_(pStatus ? static_cast<void*>(pStatus->GetImageCallback())
                               : nullptr),
-      in_appearance_form_(pStatus ? pStatus->IsInAppearanceForm() : false) {}
+      in_appearance_form_(pStatus ? pStatus->IsInAppearanceForm() : false) {
+  // [AP-FORM-IMAGE-WATERMARK] 调试：构造函数中的值
+  LOG_DEBUG_F(
+      "[AP-FORM-IMAGE-WATERMARK] ImageRenderer constructor: "
+      "in_appearance_form_=%s, image_callback_=%s",
+      (in_appearance_form_ ? "true" : "false"),
+      (image_callback_ ? "valid" : "null"));
+}
 
 CPDF_ImageRenderer::~CPDF_ImageRenderer() = default;
 

@@ -7,6 +7,7 @@
 #include "core/fpdfapi/render/cpdf_progressiverenderer.h"
 
 #include "build/build_config.h"
+#include "core/fpdfapi/page/cpdf_form.h"
 #include "core/fpdfapi/page/cpdf_image.h"
 #include "core/fpdfapi/page/cpdf_imageobject.h"
 #include "core/fpdfapi/page/cpdf_pageimagecache.h"
@@ -59,6 +60,30 @@ void CPDF_ProgressiveRenderer::Continue(PauseIndicatorIface* pPause) {
       }
       render_status_->SetTransparency(
           current_layer_->GetObjectHolder()->GetTransparency());
+
+      // [AP-FORM-IMAGE-WATERMARK] 检查 layer 是否是 AP-Form
+      bool is_page = current_layer_->GetObjectHolder()->IsPage();
+      LOG_DEBUG_F(
+          "[AP-FORM-IMAGE-WATERMARK] ProgressiveRenderer: Layer %zu, IsPage=%s",
+          layer_index_, (is_page ? "true" : "false"));
+
+      if (!is_page) {
+        CPDF_Form* pForm =
+            static_cast<CPDF_Form*>(current_layer_->GetObjectHolder());
+        bool is_ap_form = pForm ? pForm->IsAPForm() : false;
+        LOG_DEBUG_F(
+            "[AP-FORM-IMAGE-WATERMARK] ProgressiveRenderer: pForm=%p, "
+            "IsAPForm=%s",
+            pForm, (is_ap_form ? "true" : "false"));
+
+        if (pForm && is_ap_form) {
+          render_status_->SetInAppearanceForm(true);
+          LOG_INFO_F(
+              "[AP-FORM-IMAGE-WATERMARK] ProgressiveRenderer: Set "
+              "in_appearance_form=true for layer %zu",
+              layer_index_);
+        }
+      }
 
       // [AP-FORM-IMAGE-WATERMARK] 传播回调从 RenderContext
       void* callback = context_->GetImageCallback();

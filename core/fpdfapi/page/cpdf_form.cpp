@@ -17,6 +17,7 @@
 #include "core/fpdfapi/parser/cpdf_stream.h"
 #include "core/fxcrt/check_op.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
+#include "platform/shared/logger.h"  // [AP-FORM-IMAGE-WATERMARK]
 
 CPDF_Form::RecursionState::RecursionState() = default;
 
@@ -135,4 +136,15 @@ CPDF_Form::GetBitmapAndMatrixFromSoleImageOfForm() const {
   }
 
   return {{pImageObject->GetIndependentBitmap(), pImageObject->matrix()}};
+}
+
+void CPDF_Form::SetIsAPForm(bool is_ap_form) {
+  is_ap_form_ = is_ap_form;
+  LOG_INFO_F(
+      "[AP-FORM-IMAGE-WATERMARK] CPDF_Form::SetIsAPForm(%s) called on form %p",
+      (is_ap_form ? "true" : "false"), this);
+}
+
+bool CPDF_Form::IsAPForm() const {
+  return is_ap_form_;
 }

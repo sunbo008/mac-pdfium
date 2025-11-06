@@ -31,6 +31,7 @@
 #include "core/fpdfdoc/cpdf_interactiveform.h"
 #include "core/fxcrt/check.h"
 #include "core/fxcrt/containers/unique_ptr_adapters.h"
+#include "platform/shared/logger.h"  // [AP-FORM-IMAGE-WATERMARK]
 
 namespace {
 
@@ -244,6 +245,10 @@ void CPDF_AnnotList::DisplayPass(CPDF_RenderContext* pContext,
                                  const CFX_Matrix& mtMatrix,
                                  bool bWidgetPass) {
   CHECK(pContext);
+  LOG_DEBUG_F(
+      "[AP-FORM-IMAGE-WATERMARK] DisplayPass: annot_count=%zu, bWidgetPass=%s",
+      annot_list_.size(), (bWidgetPass ? "true" : "false"));
+
   for (const auto& pAnnot : annot_list_) {
     bool bWidget = pAnnot->GetSubtype() == CPDF_Annot::Subtype::WIDGET;
     if ((bWidgetPass && !bWidget) || (!bWidgetPass && bWidget)) {
@@ -263,6 +268,9 @@ void CPDF_AnnotList::DisplayPass(CPDF_RenderContext* pContext,
       continue;
     }
 
+    LOG_INFO_F(
+        "[AP-FORM-IMAGE-WATERMARK] Drawing annotation, subtype=%d, flags=0x%x",
+        static_cast<int>(pAnnot->GetSubtype()), annot_flags);
     pAnnot->DrawInContext(page_, pContext, mtMatrix,
                           CPDF_Annot::AppearanceMode::kNormal);
   }

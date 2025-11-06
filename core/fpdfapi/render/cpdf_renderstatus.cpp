@@ -406,16 +406,12 @@ bool CPDF_RenderStatus::ProcessForm(const CPDF_FormObject* pFormObj,
   RetainPtr<const CPDF_Dictionary> pResources =
       pFormObj->form()->GetDict()->GetDictFor("Resources");
 
-  // [AP-FORM-IMAGE-WATERMARK] 检测是否为 ap-form
-  bool is_annotation_form = false;
-  if (pResources) {
-    const CPDF_Dictionary* parent_res = GetFormResource();
-    const CPDF_Dictionary* page_res = GetPageResource();
-    // 如果 Form 的资源字典与父级资源字典不同，则可能是注释的外观流
-    if (!parent_res || (parent_res != page_res && page_res)) {
-      is_annotation_form = true;
-      LOG_INFO_F("[AP-FORM-IMAGE-WATERMARK] Detected ap-form");
-    }
+  // [AP-FORM-IMAGE-WATERMARK] 使用 CPDF_Form 的 IsAPForm() 方法直接判断
+  bool is_annotation_form = pFormObj->form()->IsAPForm();
+
+  if (is_annotation_form) {
+    LOG_INFO_F(
+        "[AP-FORM-IMAGE-WATERMARK] Detected ap-form from is_ap_form_ flag");
   }
 
   // [AP-FORM-IMAGE-WATERMARK] 调试：在传播前检查回调状态
@@ -1316,6 +1312,13 @@ void CPDF_RenderStatus::ProcessPathPattern(
 
 bool CPDF_RenderStatus::ProcessImage(CPDF_ImageObject* pImageObj,
                                      const CFX_Matrix& mtObj2Device) {
+  // [AP-FORM-IMAGE-WATERMARK] 调试：检查传递给 ImageRenderer 的状态
+  LOG_DEBUG_F(
+      "[AP-FORM-IMAGE-WATERMARK] ProcessImage: in_appearance_form_=%s, "
+      "image_callback_=%s",
+      (in_appearance_form_ ? "true" : "false"),
+      (image_callback_ ? "valid" : "null"));
+
   CPDF_ImageRenderer render(this);
   if (render.Start(pImageObj, mtObj2Device, std_cs_)) {
     render.Continue(nullptr);

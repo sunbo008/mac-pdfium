@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "build/build_config.h"
+#include "core/fpdfapi/page/cpdf_form.h"
 #include "core/fpdfapi/page/cpdf_pageimagecache.h"
 #include "core/fpdfapi/page/cpdf_pageobject.h"
 #include "core/fpdfapi/page/cpdf_pageobjectholder.h"
@@ -76,6 +77,23 @@ void CPDF_RenderContext::Render(CFX_RenderDevice* pDevice,
     }
     status.SetStopObject(pStopObj);
     status.SetTransparency(layer.GetObjectHolder()->GetTransparency());
+    
+    // [AP-FORM-IMAGE-WATERMARK] 检查 layer 是否是 AP-Form
+    // 只有两种派生：CPDF_Page 和 CPDF_Form。非 Page 即 Form。
+    bool is_page = layer.GetObjectHolder()->IsPage();
+    LOG_DEBUG_F("[AP-FORM-IMAGE-WATERMARK] Layer IsPage=%s", (is_page ? "true" : "false"));
+    
+    if (!is_page) {
+      CPDF_Form* pForm = static_cast<CPDF_Form*>(layer.GetObjectHolder());
+      bool is_ap_form = pForm ? pForm->IsAPForm() : false;
+      LOG_DEBUG_F("[AP-FORM-IMAGE-WATERMARK] pForm=%p, IsAPForm=%s", 
+                  pForm, (is_ap_form ? "true" : "false"));
+      
+      if (pForm && is_ap_form) {
+        status.SetInAppearanceForm(true);
+        LOG_INFO_F("[AP-FORM-IMAGE-WATERMARK] Set status.SetInAppearanceForm(true) for AP-Form layer");
+      }
+    }
     
     // [AP-FORM-IMAGE-WATERMARK] 传播回调
     if (image_callback_) {

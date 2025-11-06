@@ -59,6 +59,9 @@ class CPDF_Form final : public CPDF_PageObjectHolder,
 
   RetainPtr<const CPDF_Stream> GetStream() const;
 
+  void SetIsAPForm(bool is_ap_form);
+  bool IsAPForm() const;
+
  private:
   void ParseContentInternal(const CPDF_AllStates* pGraphicStates,
                             const CFX_Matrix* pParentMatrix,
@@ -67,6 +70,7 @@ class CPDF_Form final : public CPDF_PageObjectHolder,
 
   RecursionState recursion_state_;
   RetainPtr<CPDF_Stream> const form_stream_;
+  bool is_ap_form_ = false;
 };
 
 #endif  // CORE_FPDFAPI_PAGE_CPDF_FORM_H_

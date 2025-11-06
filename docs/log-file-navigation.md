@@ -170,3 +170,4 @@ ProcessImage called - core/fpdfapi/render/cpdf_renderstatus.cpp:417
 - [Problem Matchers](https://code.visualstudio.com/docs/editor/tasks#_defining-a-problem-matcher)
 - [Log File Highlighter](https://marketplace.visualstudio.com/items?itemName=emilast.LogFileHighlighter)
 
+
