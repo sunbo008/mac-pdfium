@@ -441,6 +441,10 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                self.rightPanel.bounds.size.height)];
   self.pdfContentView.autoresizingMask =
       NSViewWidthSizable | NSViewHeightSizable;
+  NSColor* pdfBackdropColor =
+      [NSColor colorWithCalibratedWhite:0.16 alpha:1.0];
+  self.pdfContentView.wantsLayer = YES;
+  self.pdfContentView.layer.backgroundColor = pdfBackdropColor.CGColor;
 
   // 创建PDF视图
   self.view = [[PdfView alloc] initWithFrame:NSMakeRect(0, 0, 800, 600)];
@@ -457,6 +461,12 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   scroll.hasVerticalScroller = YES;
   scroll.hasHorizontalScroller = YES;
   scroll.borderType = NSNoBorder;
+  scroll.drawsBackground = YES;
+  scroll.backgroundColor = pdfBackdropColor;
+  scroll.contentView.drawsBackground = YES;
+  if ([scroll.contentView respondsToSelector:@selector(setBackgroundColor:)]) {
+    scroll.contentView.backgroundColor = pdfBackdropColor;
+  }
   scroll.documentView = self.view;
   [self.pdfContentView addSubview:scroll];
 

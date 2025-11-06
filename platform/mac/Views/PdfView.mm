@@ -689,7 +689,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                  _pageIndex]);
 
   [super drawRect:dirtyRect];
-  [[NSColor whiteColor] setFill];
+  [[NSColor windowBackgroundColor] setFill];
   NSRectFill(self.bounds);
   if (!_doc) {
     MacLog_DebugNS(@"[PdfView] drawRect: _doc is NULL, returning");
@@ -756,6 +756,10 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     CGContextFillRect(ctx, CGRectMake(0, 0, destWpt, destHpt));
     CGContextDrawImage(ctx, CGRectMake(0, 0, destWpt, destHpt), img);
     CGContextRestoreGState(ctx);
+    NSRect pageRect =
+        NSMakeRect(_horizontalInset, 0.0, (CGFloat)destWpt, (CGFloat)destHpt);
+    [[NSColor separatorColor] setStroke];
+    NSFrameRectWithWidth(pageRect, 1.0);
     CGImageRelease(img);
     CGDataProviderRelease(dp);
     CGColorSpaceRelease(cs);
