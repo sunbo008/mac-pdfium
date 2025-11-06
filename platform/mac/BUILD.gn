@@ -18,6 +18,36 @@ if (is_mac) {
       "App.mm",
       "LoggerHelper.mm",
       "LoggerHelper.h",
+      
+      # Utils
+      "Utils/LogManager.h",
+      "Utils/LogManager.mm",
+      "Utils/SettingsManager.h",
+      "Utils/SettingsManager.mm",
+      
+      # Models
+      "Models/TocNode.h",
+      "Models/TocNode.mm",
+      
+      # Views
+      "Views/SelectableTextView.h",
+      "Views/SelectableTextView.mm",
+      "Views/DragDropView.h",
+      "Views/DragDropView.mm",
+      "Views/PdfView.h",
+      "Views/PdfView.mm",
+      
+      # Controllers
+      "Controllers/RecentFilesManager.h",
+      "Controllers/RecentFilesManager.mm",
+      "Controllers/StatusBarController.h",
+      "Controllers/StatusBarController.mm",
+      "Controllers/BookmarkPanelController.h",
+      "Controllers/BookmarkPanelController.mm",
+      "Controllers/InspectorPanelController.h",
+      "Controllers/InspectorPanelController.mm",
+      "Controllers/BookmarkDelegate.h",
+      "Controllers/BookmarkDelegate.mm",
     ]
     
     deps = [

@@ -1,0 +1,1212 @@
+//
+// Copyright 2024 The PDFium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+//
+
+#import "PdfView.h"
+#include <chrono>
+#include <vector>
+#import "../Utils/LogManager.h"
+#include "fpdfsdk/cpdfsdk_renderpage.h"
+#include "platform/shared/logger.h"
+#include "platform/shared/pdf_utils.h"
+#include "platform/shared/pdfium_object_info.h"
+#include "public/fpdf_edit.h"
+#include "public/fpdf_text.h"
+
+// 辅助函数实现
+static inline void LogFPDFLastError(const char* where) {
+  unsigned long code = FPDF_GetLastError();
+  const char* msg = "Unknown";
+  switch (code) {
+    case FPDF_ERR_SUCCESS:
+      msg = "SUCCESS";
+      break;
+    case FPDF_ERR_UNKNOWN:
+      msg = "UNKNOWN";
+      break;
+    case FPDF_ERR_FILE:
+      msg = "FILE";
+      break;
+    case FPDF_ERR_FORMAT:
+      msg = "FORMAT";
+      break;
+    case FPDF_ERR_PASSWORD:
+      msg = "PASSWORD";
+      break;
+    case FPDF_ERR_SECURITY:
+      msg = "SECURITY";
+      break;
+    case FPDF_ERR_PAGE:
+      msg = "PAGE";
+      break;
+    default:
+      break;
+  }
+  NSLog(@"[PdfWinViewer] PDFium error at %s: %lu (%@)", where, code,
+        [NSString stringWithUTF8String:msg]);
+}
+
+static inline std::string NSStringToUTF8(NSObject* obj) {
+  if (!obj) {
+    return {};
+  }
+  NSString* s = (NSString*)obj;
+  return std::string([s UTF8String] ?: "");
+}
+
+@implementation PdfView {
+  FPDF_DOCUMENT _doc;
+  int _pageIndex;
+  double _zoom;
+  // 选择与交互
+  bool _selecting;
+  NSPoint _selStart;
+  NSPoint _selEnd;
+  NSPoint _lastContextPt;  // 最近一次右键菜单触发位置（视图坐标）
+  BOOL _lastContextHitImage;  // 最近一次右键是否命中图片
+}
+- (NSPoint)toPagePxFromView:(NSPoint)viewPt {
+  // Convert view coordinates to page coordinates (in points)
+  // This should match the coordinate system used in rendering
+  double wpt = 0, hpt = 0;
+  FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
+
+  // Convert view pixels to page points
+  // The view shows the page at _zoom scale
+  double px = viewPt.x / _zoom;
+  double py = viewPt.y / _zoom;
+
+  // Note: PdfHitImageAt will handle the Y-axis flip from top-left to
+  // bottom-left
+  return NSMakePoint(px, py);
+}
+
+- (NSPoint)toViewFromPagePx:(NSPoint)pagePt {
+  // Convert page coordinates back to view coordinates for debugging
+  double vx = pagePt.x * _zoom;
+  double vy = pagePt.y * _zoom;
+  return NSMakePoint(vx, vy);
+}
+
+- (FPDF_DOCUMENT)document {
+  return _doc;
+}
+- (int)currentPageIndex {
+  return _pageIndex;
+}
+- (void)goToPage:(int)index {
+  if (!_doc) {
+    return;
+  }
+  int pc = FPDF_GetPageCount(_doc);
+  if (pc > 0) {
+    if (index < 0) {
+      index = 0;
+    }
+    if (index >= pc) {
+      index = pc - 1;
+    }
+    int oldIndex = _pageIndex;
+    _pageIndex = index;
+    [self setNeedsDisplay:YES];
+    // 如果页面真的发生了变化，通知delegate
+    if (oldIndex != _pageIndex &&
+        [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
+      [self.delegate pdfViewDidChangePage:self];
+    }
+  }
+}
+
+- (instancetype)initWithFrame:(NSRect)frame {
+  if (self = [super initWithFrame:frame]) {
+    _doc = nullptr;
+    _pageIndex = 0;
+    _zoom = 1.0;
+    _selecting = false;
+    [self.window setAcceptsMouseMovedEvents:YES];
+  }
+  return self;
+}
+
+- (BOOL)isFlipped {
+  return YES;
+}
+
+- (BOOL)openPDFAtPath:(NSString*)path {
+  NSLog(@"[PdfWinViewer] openPDFAtPath: %@", path);
+
+  // 记录开始时间
+  auto startTime = std::chrono::steady_clock::now();
+
+  // 使用新日志模块记录打开文件
+  LOG_INFO_F("========================================");
+  LOG_INFO_F("正在打开 PDF 文件：%s", [path UTF8String]);
+  LOG_DEBUG_F("文件完整路径：%s", [path UTF8String]);
+  LOG_DEBUG_F("文件名：%s", [[path lastPathComponent] UTF8String]);
+
+  if (_doc) {
+    LOG_DEBUG("关闭之前打开的文档");
+    FPDF_CloseDocument(_doc);
+    _doc = nullptr;
+    _pageIndex = 0;
+    _zoom = 1.0;
+  }
+  std::string u8 = NSStringToUTF8(path);
+  FPDF_LIBRARY_CONFIG cfg{};
+  cfg.version = 3;
+  FPDF_InitLibraryWithConfig(&cfg);
+
+  LOG_DEBUG("调用 FPDF_LoadDocument");
+  auto loadStartTime = std::chrono::steady_clock::now();
+  _doc = FPDF_LoadDocument(u8.c_str(), nullptr);
+  auto loadEndTime = std::chrono::steady_clock::now();
+
+  if (!_doc) {
+    LOG_ERROR_F("打开 PDF 文件失败：%s", [path UTF8String]);
+    LogFPDFLastError("FPDF_LoadDocument");
+    return NO;
+  }
+
+  double loadTimeMs =
+      std::chrono::duration<double, std::milli>(loadEndTime - loadStartTime)
+          .count();
+
+  int pc = FPDF_GetPageCount(_doc);
+
+  // 计算总耗时
+  auto endTime = std::chrono::steady_clock::now();
+  double totalTimeMs =
+      std::chrono::duration<double, std::milli>(endTime - startTime).count();
+
+  LOG_INFO_F("PDF 文件打开成功，共 %d 页", pc);
+  LOG_INFO_F("⏱️  文档加载耗时：%.2f ms（FPDF_LoadDocument: %.2f ms）",
+             totalTimeMs, loadTimeMs);
+  NSLog(@"[PdfWinViewer] document loaded. pageCount=%d", pc);
+// 首次渲染计时起点（只要编译时启用日志就记录，运行时再判断是否输出）
+#if PDFWV_ENABLE_LOGGING
+  _openStartSec = NowSeconds();
+  _firstRenderAfterOpen = true;
+  _lastMemMB = GetProcessMemMB();
+#endif
+  // 不在这里调用 updateViewSizeToFitPage，因为 setFrameSize 会触发 drawRect
+  // 移到 openPathAndAdjust 中，在窗口调整前调用，实现只渲染一次
+  // [self updateViewSizeToFitPage];
+  // [self setNeedsDisplay:YES];
+  return YES;
+}
+
+- (NSSize)currentPageSizePt {
+  if (!_doc) {
+    return NSMakeSize(0, 0);
+  }
+  double wpt = 0, hpt = 0;
+  FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
+  return NSMakeSize((CGFloat)wpt, (CGFloat)hpt);
+}
+
+- (void)updateViewSizeToFitPage {
+  NSSize s = [self currentPageSizePt];
+  if (s.width <= 0 || s.height <= 0) {
+    return;
+  }
+  [self setFrameSize:NSMakeSize((CGFloat)(s.width * _zoom),
+                                (CGFloat)(s.height * _zoom))];
+}
+
+- (void)keyDown:(NSEvent*)event {
+  if (!_doc) {
+    return;
+  }
+  NSString* chars = [event charactersIgnoringModifiers];
+  unichar c = chars.length ? [chars characterAtIndex:0] : 0;
+  NSEventModifierFlags mods =
+      event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+  if ((mods & NSEventModifierFlagCommand) != 0) {
+    // Cmd-based shortcuts
+    if (c == '=') {
+      _zoom = std::min(8.0, _zoom * 1.1);
+      [self updateViewSizeToFitPage];
+      [self setNeedsDisplay:YES];
+      return;
+    }
+    if (c == '-') {
+      _zoom = std::max(0.1, _zoom / 1.1);
+      [self updateViewSizeToFitPage];
+      [self setNeedsDisplay:YES];
+      return;
+    }
+    if (c == '0') {
+      _zoom = 1.0;
+      [self updateViewSizeToFitPage];
+      [self setNeedsDisplay:YES];
+      return;
+    }
+    if (c == 'g' || c == 'G') {
+      [self promptGotoPage];
+      return;
+    }
+    if (c == 'e' || c == 'E') {
+      [self exportCurrentPagePNG];
+      return;
+    }
+    if (c == 'c' || c == 'C') {
+      [self copySelectionToPasteboard];
+      return;
+    }
+  }
+  int oldIndex = _pageIndex;
+  switch (c) {
+    case NSHomeFunctionKey:
+      _pageIndex = 0;
+      break;
+    case NSEndFunctionKey: {
+      int pc = FPDF_GetPageCount(_doc);
+      if (pc > 0) {
+        _pageIndex = pc - 1;
+      }
+      break;
+    }
+    case NSPageUpFunctionKey:
+      _pageIndex = (_pageIndex > 0) ? _pageIndex - 1 : 0;
+      break;
+    case NSPageDownFunctionKey: {
+      int pc = FPDF_GetPageCount(_doc);
+      if (pc > 0 && _pageIndex < pc - 1) {
+        _pageIndex++;
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  [self setNeedsDisplay:YES];
+  // 如果页面发生了变化，通知delegate
+  if (oldIndex != _pageIndex &&
+      [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
+    [self.delegate pdfViewDidChangePage:self];
+  }
+}
+
+- (BOOL)acceptsFirstResponder {
+  return YES;
+}
+
+#pragma mark - First responder actions (Menu targets)
+
+- (IBAction)copy:(id)sender {
+  [self copySelectionToPasteboard];
+}
+- (IBAction)zoomIn:(id)sender {
+  _zoom = std::min(8.0, _zoom * 1.1);
+  [self updateViewSizeToFitPage];
+  [self setNeedsDisplay:YES];
+}
+- (IBAction)zoomOut:(id)sender {
+  _zoom = std::max(0.1, _zoom / 1.1);
+  [self updateViewSizeToFitPage];
+  [self setNeedsDisplay:YES];
+}
+- (IBAction)zoomActual:(id)sender {
+  _zoom = 1.0;
+  [self updateViewSizeToFitPage];
+  [self setNeedsDisplay:YES];
+}
+- (IBAction)goHome:(id)sender {
+  if (_doc) {
+    int oldIndex = _pageIndex;
+    _pageIndex = 0;
+    [self setNeedsDisplay:YES];
+    if (oldIndex != _pageIndex &&
+        [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
+      [self.delegate pdfViewDidChangePage:self];
+    }
+  }
+}
+- (IBAction)goEnd:(id)sender {
+  if (_doc) {
+    int pc = FPDF_GetPageCount(_doc);
+    if (pc > 0) {
+      int oldIndex = _pageIndex;
+      _pageIndex = pc - 1;
+      [self setNeedsDisplay:YES];
+      if (oldIndex != _pageIndex &&
+          [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
+        [self.delegate pdfViewDidChangePage:self];
+      }
+    }
+  }
+}
+- (IBAction)goPrevPage:(id)sender {
+  if (_doc) {
+    if (_pageIndex > 0) {
+      int oldIndex = _pageIndex;
+      _pageIndex--;
+      [self setNeedsDisplay:YES];
+      if (oldIndex != _pageIndex &&
+          [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
+        [self.delegate pdfViewDidChangePage:self];
+      }
+    }
+  }
+}
+- (IBAction)goNextPage:(id)sender {
+  if (_doc) {
+    int pc = FPDF_GetPageCount(_doc);
+    if (pc > 0 && _pageIndex < pc - 1) {
+      int oldIndex = _pageIndex;
+      _pageIndex++;
+      [self setNeedsDisplay:YES];
+      if (oldIndex != _pageIndex &&
+          [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
+        [self.delegate pdfViewDidChangePage:self];
+      }
+    }
+  }
+}
+- (IBAction)gotoPage:(id)sender {
+  [self promptGotoPage];
+}
+- (IBAction)exportPNG:(id)sender {
+  [self exportCurrentPagePNG];
+}
+
+- (void)magnifyWithEvent:(NSEvent*)event {
+  // 触控板捏合缩放
+  _zoom = std::max(0.1, std::min(8.0, _zoom * (1.0 + event.magnification)));
+  [self updateViewSizeToFitPage];
+  [self setNeedsDisplay:YES];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+  MacLog_DebugNS([NSString
+      stringWithFormat:@"[PdfView] drawRect called, dirtyRect: %@, bounds: %@",
+                       NSStringFromRect(dirtyRect),
+                       NSStringFromRect(self.bounds)]);
+  MacLog_DebugNS(
+      [NSString stringWithFormat:@"[PdfView] _doc = %p, _pageIndex = %d", _doc,
+                                 _pageIndex]);
+
+  [super drawRect:dirtyRect];
+  [[NSColor whiteColor] setFill];
+  NSRectFill(self.bounds);
+  if (!_doc) {
+    MacLog_DebugNS(@"[PdfView] drawRect: _doc is NULL, returning");
+    return;
+  }
+  int pageCount = FPDF_GetPageCount(_doc);
+  if (pageCount <= 0) {
+    return;
+  }
+  if (_pageIndex < 0) {
+    _pageIndex = 0;
+  }
+  if (_pageIndex >= pageCount) {
+    _pageIndex = pageCount - 1;
+  }
+
+  FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
+  if (!page) {
+    LogFPDFLastError("FPDF_LoadPage");
+    return;
+  }
+#if PDFWV_ENABLE_LOGGING
+  bool _logActive = MacLog_IsEnabled();
+  double t0 = _logActive ? NowSeconds() : 0.0;
+#endif
+  double wpt = 0, hpt = 0;
+  FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
+  // 使用 Retina 比例计算像素，确保 1:1 像素映射，避免缩放导致的模糊
+  double scale = [[self window] backingScaleFactor] ?: 1.0;
+  int pxW = std::max(1, (int)llround(wpt * _zoom * scale));
+  int pxH = std::max(1, (int)llround(hpt * _zoom * scale));
+
+  std::vector<unsigned char> buffer((size_t)pxW * pxH * 4, 255);
+  FPDF_BITMAP bmp =
+      FPDFBitmap_CreateEx(pxW, pxH, FPDFBitmap_BGRA, buffer.data(), pxW * 4);
+  if (bmp) {
+    FPDFBitmap_FillRect(bmp, 0, 0, pxW, pxH, 0xFFFFFFFF);
+    int flags = FPDF_ANNOT | FPDF_LCD_TEXT;
+    FPDF_RenderPageBitmap(bmp, page, 0, 0, pxW, pxH, 0, flags);
+
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGDataProviderRef dp = CGDataProviderCreateWithData(
+        NULL, buffer.data(), (size_t)buffer.size(), NULL);
+    CGBitmapInfo bi =
+        (CGBitmapInfo)((uint32_t)kCGBitmapByteOrder32Little |
+                       (uint32_t)kCGImageAlphaPremultipliedFirst);  // BGRA
+    CGImageRef img = CGImageCreate(pxW, pxH, 8, 32, pxW * 4, cs, bi, dp, NULL,
+                                   false, kCGRenderingIntentDefault);
+    // 以点（pt）为单位的目标绘制尺寸，并对齐到像素边界
+    double destWpt = wpt * _zoom;
+    double destHpt = hpt * _zoom;
+    destWpt = llround(destWpt * scale) / scale;
+    destHpt = llround(destHpt * scale) / scale;
+    CGContextRef ctx = NSGraphicsContext.currentContext.CGContext;
+    CGContextSaveGState(ctx);
+    // 插值关闭，保证位图锐利
+    CGContextSetInterpolationQuality(ctx, kCGInterpolationNone);
+    // 视图是 flipped（y 向下），需对图片做一次上下翻转
+    CGContextTranslateCTM(ctx, 0, destHpt);
+    CGContextScaleCTM(ctx, 1.0, -1.0);
+    // 绘制统一的白色背景（随缩放变化），避免缩放后背景与内容不同步
+    CGContextSetFillColorWithColor(ctx, [NSColor whiteColor].CGColor);
+    CGContextFillRect(ctx, CGRectMake(0, 0, destWpt, destHpt));
+    CGContextDrawImage(ctx, CGRectMake(0, 0, destWpt, destHpt), img);
+    CGContextRestoreGState(ctx);
+    CGImageRelease(img);
+    CGDataProviderRelease(dp);
+    CGColorSpaceRelease(cs);
+
+    FPDFBitmap_Destroy(bmp);
+  }
+  // 绘制选择框
+  if (_selecting || !NSEqualPoints(_selStart, _selEnd)) {
+    NSRect sel = NSMakeRect(
+        std::min(_selStart.x, _selEnd.x), std::min(_selStart.y, _selEnd.y),
+        fabs(_selStart.x - _selEnd.x), fabs(_selStart.y - _selEnd.y));
+    [[NSColor colorWithCalibratedRed:0 green:0.4 blue:1 alpha:0.2] setFill];
+    NSRectFillUsingOperation(sel, NSCompositingOperationSourceOver);
+    [[NSColor colorWithCalibratedRed:0 green:0.4 blue:1 alpha:0.8] setStroke];
+    NSFrameRectWithWidth(sel, 1.0);
+  }
+  FPDF_ClosePage(page);
+#if PDFWV_ENABLE_LOGGING
+  if (_logActive) {
+    double t1 = NowSeconds();
+    double ms = (t1 - t0) * 1000.0;
+    double curMB = GetProcessMemMB();
+    double dMB = curMB - _lastMemMB;
+    _lastMemMB = curMB;
+    if (_firstRenderAfterOpen) {
+      double openMs = (t1 - _openStartSec) * 1000.0;
+      LOG_INFO_F("🎨 首次渲染完成 - 页面 %d，缩放 %.0f%%，耗时 %.2f "
+                 "ms（从打开到首次显示）",
+                 _pageIndex + 1, _zoom * 100.0, openMs);
+      Log_WritePerfEx(_pageIndex + 1, _zoom * 100.0, openMs, curMB, dMB,
+                      L"打开PDF→首次渲染", __FILE__, __LINE__, __FUNCTION__);
+      _firstRenderAfterOpen = false;
+    } else {
+      // 只在耗时较长时记录，避免日志过多
+      if (ms > 30.0) {  // 超过 30ms 才记录
+        LOG_DEBUG_F("🎨 页面渲染 - 页面 %d，缩放 %.0f%%，耗时 %.2f ms",
+                    _pageIndex + 1, _zoom * 100.0, ms);
+      }
+      Log_WritePerf(_pageIndex + 1, _zoom * 100.0, ms, curMB, dMB);
+    }
+  }
+#endif
+}
+
+#pragma mark - Mouse events for selection and link navigation
+
+- (void)mouseDown:(NSEvent*)event {
+  if (!_doc) {
+    return;
+  }
+  _selecting = true;
+  _selStart = [self convertPoint:event.locationInWindow fromView:nil];
+  _selEnd = _selStart;
+  [self setNeedsDisplay:YES];
+}
+
+- (void)mouseDragged:(NSEvent*)event {
+  if (!_doc || !_selecting) {
+    return;
+  }
+  _selEnd = [self convertPoint:event.locationInWindow fromView:nil];
+  [self setNeedsDisplay:YES];
+}
+
+- (void)mouseUp:(NSEvent*)event {
+  if (!_doc) {
+    return;
+  }
+  NSPoint up = [self convertPoint:event.locationInWindow fromView:nil];
+  if (_selecting) {
+    _selEnd = up;
+    _selecting = false;
+    [self setNeedsDisplay:YES];
+  } else {
+    // 非选择：尝试链接跳转
+    [self tryNavigateLinkAtPoint:up];
+
+    // 检测点击的PDF对象并通知检查器
+    [self detectObjectAtPoint:up];
+  }
+}
+
+- (void)rightMouseDown:(NSEvent*)event {
+  if (!_doc) {
+    MacLog_DebugNS(@"[context] blocked: no document");
+    return;
+  }
+  // 记录菜单触发点
+  _lastContextPt = [self convertPoint:event.locationInWindow fromView:nil];
+  MacLog_DebugNS([NSString stringWithFormat:@"[context] raw viewPt=(%.1f,%.1f)",
+                                            _lastContextPt.x,
+                                            _lastContextPt.y]);
+  // 判断命中图片
+  NSPoint pt = _lastContextPt;
+  NSPoint pageXY = [self toPagePxFromView:pt];
+  double px = pageXY.x, py = pageXY.y;
+  double wpt = 0, hpt = 0;
+  FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
+  FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
+  MacLog_DebugNS(
+      [NSString stringWithFormat:@"[context] pageXY=(%.1f,%.1f) pageIndex=%d",
+                                 px, py, _pageIndex]);
+  BOOL hitImage = NO;
+  FPDF_PAGEOBJECT hitObj = nullptr;
+  if (page) {
+    // 先检查页面上有多少个图片对象
+    int totalObjs = FPDFPage_CountObjects(page);
+    int imageObjs = 0;
+    for (int i = 0; i < totalObjs; i++) {
+      FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
+      if (obj && FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_IMAGE) {
+        imageObjs++;
+      }
+    }
+    MacLog_DebugNS([NSString
+        stringWithFormat:
+            @"[context] page has %d objects, %d images, pageSize=%.1fx%.1f",
+            totalObjs, imageObjs, wpt, hpt]);
+
+    // 先手动检查前几个图片的边界框
+    int debugCount = 0;
+    for (int i = totalObjs - 1; i >= 0 && debugCount < 3; --i) {
+      FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
+      if (obj && FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_IMAGE) {
+        debugCount++;
+        FS_QUADPOINTSF qp{};
+        if (FPDFPageObj_GetRotatedBounds(obj, &qp)) {
+          float minx = std::min(std::min(qp.x1, qp.x2), std::min(qp.x3, qp.x4));
+          float maxx = std::max(std::max(qp.x1, qp.x2), std::max(qp.x3, qp.x4));
+          float miny = std::min(std::min(qp.y1, qp.y2), std::min(qp.y3, qp.y4));
+          float maxy = std::max(std::max(qp.y1, qp.y2), std::max(qp.y3, qp.y4));
+
+          // 转换为视图坐标系显示（PDF坐标系原点在左下角，视图坐标系原点在左上角）
+          NSPoint topLeft =
+              [self toViewFromPagePx:NSMakePoint(minx, hpt - maxy)];
+          NSPoint bottomRight =
+              [self toViewFromPagePx:NSMakePoint(maxx, hpt - miny)];
+
+          MacLog_DebugNS([NSString
+              stringWithFormat:@"[context] coordinate check: hpt=%.1f, "
+                               @"PDF_Y_range=%.1f-%.1f, VIEW_Y_range=%.1f-%.1f",
+                               hpt, miny, maxy, topLeft.y, bottomRight.y]);
+
+          MacLog_DebugNS([NSString
+              stringWithFormat:
+                  @"[context] image %d PDF bounds: (%.1f,%.1f)-(%.1f,%.1f)",
+                  debugCount, minx, miny, maxx, maxy]);
+          MacLog_DebugNS([NSString
+              stringWithFormat:
+                  @"[context] image %d VIEW bounds: (%.1f,%.1f)-(%.1f,%.1f)",
+                  debugCount, topLeft.x, topLeft.y, bottomRight.x,
+                  bottomRight.y]);
+        }
+      }
+    }
+
+    PdfHitImageResult r = PdfHitImageAt(page, px, py, hpt, 2.0f);
+    hitObj = r.imageObj;
+    hitImage = (hitObj != nullptr);
+
+    if (hitImage) {
+      unsigned int iw = 0, ih = 0;
+      FPDFImageObj_GetImagePixelSize(hitObj, &iw, &ih);
+      MacLog_DebugNS(
+          [NSString stringWithFormat:@"[context] hit image pixel=%ux%u, "
+                                     @"bounds=(%.1f,%.1f)-(%.1f,%.1f)",
+                                     iw, ih, r.minx, r.miny, r.maxx, r.maxy]);
+    } else {
+      MacLog_DebugNS([NSString
+          stringWithFormat:@"[context] no image hit at PDF coords (%.1f,%.1f)",
+                           px, py]);
+    }
+    FPDF_ClosePage(page);
+  }
+  _lastContextHitImage = hitImage;
+  NSString* ctxLine =
+      [NSString stringWithFormat:@"[context] doc=%@ page=%d view=(%.1f,%.1f) "
+                                 @"pageXY=(%.1f,%.1f) hitImage=%@",
+                                 _doc ? @"YES" : @"NO", _pageIndex, pt.x, pt.y,
+                                 px, py, hitImage ? @"YES" : @"NO"];
+  NSLog(@"[PdfWinViewer] %@", ctxLine);
+  MacLog_DebugNS(ctxLine);
+  NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
+  menu.autoenablesItems = NO;  // 禁用自动启用，手动控制菜单项状态
+  [menu addItemWithTitle:@"复制选中文本"
+                  action:@selector(copySelectionToPasteboard)
+           keyEquivalent:@""];
+  [menu addItem:[NSMenuItem separatorItem]];
+  NSMenuItem* expPage = [menu addItemWithTitle:@"导出当前页 PNG"
+                                        action:@selector(exportCurrentPagePNG)
+                                 keyEquivalent:@""];
+  expPage.target = self;
+  expPage.enabled = (_doc != nullptr);
+  NSMenuItem* saveImg = [menu addItemWithTitle:@"保存图片…"
+                                        action:@selector(saveImageAtPoint:)
+                                 keyEquivalent:@""];
+  saveImg.target = self;
+  saveImg.enabled = hitImage;
+  MacLog_DebugNS([NSString stringWithFormat:@"[context] menu item enabled: %@",
+                                            hitImage ? @"YES" : @"NO"]);
+  [NSMenu popUpContextMenu:menu withEvent:event forView:self];
+}
+
+- (void)scrollWheel:(NSEvent*)event {
+  NSEventModifierFlags mods =
+      event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+  if ((mods & NSEventModifierFlagCommand) != 0) {
+    double delta = event.scrollingDeltaY;
+    if (event.hasPreciseScrollingDeltas) {
+      delta *= 0.1;
+    }
+    if (delta > 0) {
+      _zoom = std::min(8.0, _zoom * 1.05);
+    } else if (delta < 0) {
+      _zoom = std::max(0.1, _zoom / 1.05);
+    }
+    [self updateViewSizeToFitPage];
+    [self setNeedsDisplay:YES];
+  } else {
+    if (self.enclosingScrollView) {
+      [self.enclosingScrollView scrollWheel:event];
+    } else {
+      [super scrollWheel:event];
+    }
+  }
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem*)menuItem {
+  if (menuItem.action == @selector(copySelectionToPasteboard)) {
+    return !NSEqualPoints(_selStart, _selEnd);
+  }
+  if (menuItem.action == @selector(copy:)) {
+    return _doc && !NSEqualPoints(_selStart, _selEnd);
+  }
+  if (menuItem.action == @selector(exportPNG:)) {
+    return _doc != nullptr;
+  }
+  return YES;
+}
+
+- (void)copySelectionToPasteboard {
+  if (!_doc) {
+    return;
+  }
+  NSString* text = [self extractSelectedText];
+  if (text.length == 0) {
+    return;
+  }
+  NSPasteboard* pb = [NSPasteboard generalPasteboard];
+  [pb clearContents];
+  [pb setString:text forType:NSPasteboardTypeString];
+}
+
+- (NSString*)extractSelectedText {
+  if (!_doc || NSEqualPoints(_selStart, _selEnd)) {
+    return @"";
+  }
+  FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
+  if (!page) {
+    return @"";
+  }
+  double wpt = 0, hpt = 0;
+  FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
+  // 视图坐标 -> 页面像素坐标（与渲染一致）
+  int dpi = 72 * (int)ceil([self.window backingScaleFactor] ?: 2.0);
+  auto toPagePx = ^(NSPoint p) {
+    double x = p.x * (dpi / 72.0) / _zoom;
+    double yTopDown = p.y * (dpi / 72.0) / _zoom;
+    double y = std::max(0.0, hpt - yTopDown);
+    return NSMakePoint(x, y);
+  };
+  NSPoint a = toPagePx(_selStart), b = toPagePx(_selEnd);
+  double left = std::min(a.x, b.x), right = std::max(a.x, b.x);
+  double bottom = std::min(a.y, b.y), top = std::max(a.y, b.y);
+  FPDF_TEXTPAGE tp = FPDFText_LoadPage(page);
+  if (!tp) {
+    FPDF_ClosePage(page);
+    return @"";
+  }
+  int n = FPDFText_GetBoundedText(tp, left, top, right, bottom, nullptr, 0);
+  if (n <= 0) {
+    FPDFText_ClosePage(tp);
+    FPDF_ClosePage(page);
+    return @"";
+  }
+  std::vector<unsigned short> wbuf((size_t)n + 1, 0);
+  FPDFText_GetBoundedText(tp, left, top, right, bottom,
+                          (unsigned short*)wbuf.data(), n);
+  FPDFText_ClosePage(tp);
+  FPDF_ClosePage(page);
+  NSString* s = [[NSString alloc] initWithCharacters:(unichar*)wbuf.data()
+                                              length:(NSUInteger)n];
+  return s ?: @"";
+}
+
+- (void)tryNavigateLinkAtPoint:(NSPoint)viewPt {
+  if (!_doc) {
+    return;
+  }
+  FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
+  if (!page) {
+    return;
+  }
+  double wpt = 0, hpt = 0;
+  FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
+  int dpi = 72 * (int)ceil([self.window backingScaleFactor] ?: 2.0);
+  double px = viewPt.x * (dpi / 72.0) / _zoom;
+  double py = std::max(0.0, hpt - viewPt.y * (dpi / 72.0) / _zoom);
+  FPDF_LINK link = FPDFLink_GetLinkAtPoint(page, px, py);
+  if (link) {
+    FPDF_DEST dest = FPDFLink_GetDest(_doc, link);
+    if (!dest) {
+      FPDF_ACTION act = FPDFLink_GetAction(link);
+      if (act) {
+        dest = FPDFAction_GetDest(_doc, act);
+      }
+    }
+    if (dest) {
+      int pageIndex = FPDFDest_GetDestPageIndex(_doc, dest);
+      if (pageIndex >= 0) {
+        _pageIndex = pageIndex;
+        [self setNeedsDisplay:YES];
+      }
+    }
+  }
+  FPDF_ClosePage(page);
+}
+
+- (void)promptGotoPage {
+  if (!_doc) {
+    return;
+  }
+  NSInteger pc = FPDF_GetPageCount(_doc);
+  NSAlert* alert = [NSAlert new];
+  alert.messageText = @"跳转到页";
+  NSTextField* tf =
+      [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 24)];
+  [tf setStringValue:[NSString stringWithFormat:@"%d", _pageIndex + 1]];
+  alert.accessoryView = tf;
+  [alert addButtonWithTitle:@"OK"];
+  [alert addButtonWithTitle:@"Cancel"];
+  if ([alert runModal] == NSAlertFirstButtonReturn) {
+    NSInteger v = tf.integerValue;
+
+    // 边界检查：确保页码在有效范围内
+    if (v < 1) {
+      v = 1;  // 小于最小值时使用最小值
+      NSLog(@"[PageNavigation] 输入页码小于1，调整为最小值: %ld", (long)v);
+    } else if (v > pc) {
+      v = pc;  // 大于最大值时使用最大值
+      NSLog(@"[PageNavigation] 输入页码超过最大值%ld，调整为最大值: %ld",
+            (long)pc, (long)v);
+    }
+
+    int oldIndex = _pageIndex;
+    _pageIndex = (int)v - 1;  // 转换为0基索引
+    NSLog(@"[PageNavigation] 设置页码为: %ld (索引: %d)", (long)v, _pageIndex);
+    [self setNeedsDisplay:YES];
+
+    if (oldIndex != _pageIndex &&
+        [self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
+      [self.delegate pdfViewDidChangePage:self];
+    }
+  }
+}
+
+- (BOOL)exportCurrentPagePNG {
+  NSLog(@"[PdfWinViewer][exportPage] doc=%@ page=%d", _doc ? @"YES" : @"NO",
+        _pageIndex);
+  if (!_doc) {
+    return NO;
+  }
+  FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
+  if (!page) {
+    return NO;
+  }
+  double wpt = 0, hpt = 0;
+  FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
+  int dpiX = 72 * (int)ceil([self.window backingScaleFactor] ?: 2.0);
+  int dpiY = dpiX;
+  double z = _zoom;
+  int pxW = std::max(1, (int)llround(wpt / 72.0 * dpiX * z));
+  int pxH = std::max(1, (int)llround(hpt / 72.0 * dpiY * z));
+  std::vector<unsigned char> buffer((size_t)pxW * pxH * 4, 255);
+  FPDF_BITMAP bmp =
+      FPDFBitmap_CreateEx(pxW, pxH, FPDFBitmap_BGRA, buffer.data(), pxW * 4);
+  if (!bmp) {
+    FPDF_ClosePage(page);
+    return NO;
+  }
+  FPDFBitmap_FillRect(bmp, 0, 0, pxW, pxH, 0xFFFFFFFF);
+  FPDF_RenderPageBitmap(bmp, page, 0, 0, pxW, pxH, 0,
+                        FPDF_ANNOT | FPDF_LCD_TEXT);
+
+  NSSavePanel* sp = [NSSavePanel savePanel];
+  [sp setNameFieldStringValue:[NSString stringWithFormat:@"page_%d.png",
+                                                         _pageIndex + 1]];
+  if ([sp runModal] != NSModalResponseOK) {
+    FPDFBitmap_Destroy(bmp);
+    FPDF_ClosePage(page);
+    return NO;
+  }
+  NSURL* url = sp.URL;
+
+  CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+  CGDataProviderRef dp = CGDataProviderCreateWithData(
+      NULL, buffer.data(), (size_t)buffer.size(), NULL);
+  CGBitmapInfo bi = kCGBitmapByteOrder32Little |
+                    (CGBitmapInfo)kCGImageAlphaPremultipliedFirst;
+  CGImageRef img = CGImageCreate(pxW, pxH, 8, 32, pxW * 4, cs, bi, dp, NULL,
+                                 false, kCGRenderingIntentDefault);
+  CFStringRef pngUti = (__bridge CFStringRef)UTTypePNG.identifier;
+  CGImageDestinationRef dst =
+      CGImageDestinationCreateWithURL((__bridge CFURLRef)url, pngUti, 1, NULL);
+  if (dst && img) {
+    CGImageDestinationAddImage(dst, img, NULL);
+    CGImageDestinationFinalize(dst);
+  }
+  if (dst) {
+    CFRelease(dst);
+  }
+  if (img) {
+    CGImageRelease(img);
+  }
+  if (dp) {
+    CGDataProviderRelease(dp);
+  }
+  if (cs) {
+    CGColorSpaceRelease(cs);
+  }
+  FPDFBitmap_Destroy(bmp);
+  FPDF_ClosePage(page);
+  return YES;
+}
+
+- (IBAction)saveImageAtPoint:(id)sender {
+  if (!_doc) {
+    return;
+  }
+  if (!_lastContextHitImage) {
+    MacLog_DebugNS(@"[saveImage] blocked: last context not on image");
+    return;
+  }
+  NSPoint pt = _lastContextPt;  // 使用右键弹出时记录的位置
+  NSPoint pageXY = [self toPagePxFromView:pt];
+  double px = pageXY.x, py = pageXY.y;
+  double wpt = 0, hpt = 0;
+  FPDF_GetPageSizeByIndex(_doc, _pageIndex, &wpt, &hpt);
+  NSLog(@"[PdfWinViewer][saveImage] use pt=(%.1f,%.1f) => pageXY=(%.1f,%.1f) "
+        @"pageWH=(%.1f,%.1f)",
+        pt.x, pt.y, px, py, wpt, hpt);
+  FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
+  if (!page) {
+    return;
+  }
+  // 使用共享的 pdf_utils 模块查找命中图片
+  PdfHitImageResult hitResult = PdfHitImageAt(page, px, py, hpt, 2.0f);
+  FPDF_PAGEOBJECT hit = hitResult.imageObj;
+  MacLog_DebugNS([NSString
+      stringWithFormat:
+          @"[saveImage] hit test: obj=%p, bounds=(%.1f,%.1f)-(%.1f,%.1f)", hit,
+          hitResult.minx, hitResult.miny, hitResult.maxx, hitResult.maxy]);
+  if (!hit) {
+    NSLog(@"[PdfWinViewer][saveImage] no image hit");
+    MacLog_DebugNS(@"[saveImage] no image found at coordinates");
+    FPDF_ClosePage(page);
+    return;
+  }
+  // 优先原始像素，如失败回退渲染位图（抽到 shared 模块）
+  bool needDestroy = false;
+  FPDF_BITMAP useBmp = PdfAcquireBitmapForImage(_doc, page, hit, needDestroy);
+  MacLog_DebugNS([NSString
+      stringWithFormat:@"[saveImage] bitmap acquired: %p, needDestroy: %@",
+                       useBmp, needDestroy ? @"YES" : @"NO"]);
+
+  void* buf = nullptr;
+  int w = 0, h = 0, stride = 0;
+  if (useBmp) {
+    buf = FPDFBitmap_GetBuffer(useBmp);
+    w = FPDFBitmap_GetWidth(useBmp);
+    h = FPDFBitmap_GetHeight(useBmp);
+    stride = FPDFBitmap_GetStride(useBmp);
+    MacLog_DebugNS([NSString
+        stringWithFormat:@"[saveImage] bitmap info: %dx%d, stride=%d, buf=%p",
+                         w, h, stride, buf]);
+  }
+  if (!buf || w <= 0 || h <= 0) {
+    NSLog(@"[PdfWinViewer][saveImage] no bitmap available");
+    MacLog_DebugNS(@"[saveImage] bitmap acquisition failed");
+    if (needDestroy && useBmp) {
+      FPDFBitmap_Destroy(useBmp);
+    }
+    FPDF_ClosePage(page);
+    return;
+  }
+  // 保存为 PNG（mac 端采用 ImageIO）
+  NSSavePanel* sp = [NSSavePanel savePanel];
+  [sp setNameFieldStringValue:@"image.png"];
+  NSInteger resp = [sp runModal];
+  NSLog(@"[PdfWinViewer][saveImage] save panel resp=%ld", (long)resp);
+  if (resp != NSModalResponseOK) {
+    if (needDestroy) { /* release rendered */
+    }
+    FPDF_ClosePage(page);
+    return;
+  }
+  NSURL* url = sp.URL;
+
+  // 获取 PDFium 位图格式
+  int pdfFormat = FPDFBitmap_GetFormat(useBmp);
+  MacLog_DebugNS(
+      [NSString stringWithFormat:@"[saveImage] PDFium format: %d", pdfFormat]);
+
+  CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+  CGDataProviderRef dp = nullptr;
+
+  // 根据 PDFium 格式设置正确的位图信息
+  CGBitmapInfo bi;
+  int bitsPerComponent = 8;
+  int bitsPerPixel = 32;
+  int finalStride = stride;
+
+  // BGR 24位格式的转换缓冲区（需要在作用域外保持）
+  static std::vector<unsigned char> rgbBuffer;
+
+  if (pdfFormat == FPDFBitmap_BGRA) {
+    // BGRA 格式
+    bi = (CGBitmapInfo)((uint32_t)kCGBitmapByteOrder32Little |
+                        (uint32_t)kCGImageAlphaPremultipliedFirst);
+    dp = CGDataProviderCreateWithData(NULL, buf, (size_t)(stride * h), NULL);
+  } else if (pdfFormat == FPDFBitmap_BGRx) {
+    // BGRx 格式（无 alpha）
+    bi = (CGBitmapInfo)((uint32_t)kCGBitmapByteOrder32Little |
+                        (uint32_t)kCGImageAlphaNoneSkipFirst);
+    dp = CGDataProviderCreateWithData(NULL, buf, (size_t)(stride * h), NULL);
+  } else if (pdfFormat == FPDFBitmap_BGR) {
+    // BGR 24位格式需要特殊处理，转换为 RGB 格式
+    MacLog_DebugNS(@"[saveImage] converting BGR to RGB format");
+
+    // 创建 RGB 缓冲区
+    rgbBuffer.resize(w * h * 3);
+    const unsigned char* bgrData = (const unsigned char*)buf;
+
+    // BGR -> RGB 转换
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int bgrIdx = y * stride + x * 3;
+        int rgbIdx = y * w * 3 + x * 3;
+        rgbBuffer[rgbIdx + 0] = bgrData[bgrIdx + 2];  // R = B
+        rgbBuffer[rgbIdx + 1] = bgrData[bgrIdx + 1];  // G = G
+        rgbBuffer[rgbIdx + 2] = bgrData[bgrIdx + 0];  // B = R
+      }
+    }
+
+    // 更新参数使用 RGB 数据
+    dp = CGDataProviderCreateWithData(NULL, rgbBuffer.data(), rgbBuffer.size(),
+                                      NULL);
+    bitsPerPixel = 24;
+    bi = (CGBitmapInfo)kCGBitmapByteOrderDefault;
+    finalStride = w * 3;  // RGB stride
+
+    MacLog_DebugNS([NSString
+        stringWithFormat:@"[saveImage] BGR converted to RGB, new stride=%d",
+                         finalStride]);
+  } else {
+    // 默认使用 BGRA
+    bi = (CGBitmapInfo)((uint32_t)kCGBitmapByteOrder32Little |
+                        (uint32_t)kCGImageAlphaPremultipliedFirst);
+    dp = CGDataProviderCreateWithData(NULL, buf, (size_t)(stride * h), NULL);
+  }
+
+  MacLog_DebugNS([NSString
+      stringWithFormat:@"[saveImage] using bitsPerPixel=%d, bitmapInfo=0x%x",
+                       bitsPerPixel, (unsigned)bi]);
+
+  CGImageRef img =
+      CGImageCreate(w, h, bitsPerComponent, bitsPerPixel, finalStride, cs, bi,
+                    dp, NULL, false, kCGRenderingIntentDefault);
+  MacLog_DebugNS(
+      [NSString stringWithFormat:@"[saveImage] CGImage created: %p", img]);
+  CGImageDestinationRef dst = CGImageDestinationCreateWithURL(
+      (__bridge CFURLRef)url, (__bridge CFStringRef)UTTypePNG.identifier, 1,
+      NULL);
+  MacLog_DebugNS([NSString
+      stringWithFormat:@"[saveImage] destination created: %p, image: %p", dst,
+                       img]);
+
+  bool saveSuccess = false;
+  if (dst && img) {
+    CGImageDestinationAddImage(dst, img, NULL);
+    saveSuccess = CGImageDestinationFinalize(dst);
+    MacLog_DebugNS(
+        [NSString stringWithFormat:@"[saveImage] finalize result: %@",
+                                   saveSuccess ? @"SUCCESS" : @"FAILED"]);
+  } else {
+    MacLog_DebugNS(@"[saveImage] missing destination or image");
+  }
+
+  if (dst) {
+    CFRelease(dst);
+  }
+  if (img) {
+    CGImageRelease(img);
+  }
+  if (dp) {
+    CGDataProviderRelease(dp);
+  }
+  if (cs) {
+    CGColorSpaceRelease(cs);
+  }
+
+  // 释放 PDFium 位图
+  if (needDestroy && useBmp) {
+    FPDFBitmap_Destroy(useBmp);
+    MacLog_DebugNS(@"[saveImage] bitmap destroyed");
+  }
+
+  FPDF_ClosePage(page);
+
+  NSLog(@"[PdfWinViewer][saveImage] save completed: %@, path: %@",
+        saveSuccess ? @"SUCCESS" : @"FAILED", url.path);
+  MacLog_DebugNS(
+      [NSString stringWithFormat:@"[saveImage] final result: %@",
+                                 saveSuccess ? @"SUCCESS" : @"FAILED"]);
+}
+
+// 检测点击位置的PDF对象
+- (void)detectObjectAtPoint:(NSPoint)viewPoint {
+  if (!_doc) {
+    return;
+  }
+
+  NSPoint pageXY = [self toPagePxFromView:viewPoint];
+  double px = pageXY.x, py = pageXY.y;
+
+  FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
+  if (!page) {
+    return;
+  }
+
+  // 遍历页面上的所有对象
+  int totalObjs = FPDFPage_CountObjects(page);
+  NSLog(@"[PdfView] 检测点击位置 (%.1f, %.1f)，页面共有 %d 个对象", px, py,
+        totalObjs);
+
+  for (int i = 0; i < totalObjs; i++) {
+    FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
+    if (!obj) {
+      continue;
+    }
+
+    // 获取对象边界
+    float left, bottom, right, top;
+    if (FPDFPageObj_GetBounds(obj, &left, &bottom, &right, &top)) {
+      // 检查点击是否在对象边界内
+      if (px >= left && px <= right && py >= bottom && py <= top) {
+        int objType = FPDFPageObj_GetType(obj);
+        NSLog(
+            @"[PdfView] 点击命中对象 %d，类型: %d，边界: (%.1f,%.1f,%.1f,%.1f)",
+            i, objType, left, bottom, right, top);
+
+        // 通知AppDelegate跳转到检查器中的对应对象
+        if (self.delegate && [self.delegate respondsToSelector:@selector
+                                            (pdfViewDidClickObject:atIndex:)]) {
+          // 将FPDF_PAGEOBJECT包装为NSValue传递
+          NSValue* objValue = [NSValue valueWithPointer:obj];
+          [self.delegate performSelector:@selector(pdfViewDidClickObject:
+                                                                 atIndex:)
+                              withObject:objValue
+                              withObject:@(i)];
+        }
+        break;  // 只处理第一个命中的对象
+      }
+    }
+  }
+
+  FPDF_ClosePage(page);
+}
+
+// 文本查找功能
+- (BOOL)findText:(NSString*)searchText fromIndex:(NSNumber*)startIndex {
+  if (!_doc || !searchText || searchText.length == 0) {
+    NSLog(@"[PdfView] 查找失败：无效的文档或搜索文本");
+    return NO;
+  }
+
+  FPDF_PAGE page = FPDF_LoadPage(_doc, _pageIndex);
+  if (!page) {
+    NSLog(@"[PdfView] 查找失败：无法加载页面 %d", _pageIndex);
+    return NO;
+  }
+
+  // 加载文本页面
+  FPDF_TEXTPAGE textPage = FPDFText_LoadPage(page);
+  if (!textPage) {
+    NSLog(@"[PdfView] 查找失败：无法加载文本页面");
+    FPDF_ClosePage(page);
+    return NO;
+  }
+
+  // 将NSString转换为FPDF_WIDESTRING
+  NSData* utf16Data =
+      [searchText dataUsingEncoding:NSUTF16LittleEndianStringEncoding];
+  FPDF_WIDESTRING wideString = (FPDF_WIDESTRING)utf16Data.bytes;
+
+  int startIdx = startIndex ? [startIndex intValue] : 0;
+  NSLog(@"[PdfView] 开始查找文本: '%@'，起始索引: %d", searchText, startIdx);
+
+  // 开始搜索
+  FPDF_SCHHANDLE searchHandle =
+      FPDFText_FindStart(textPage, wideString, 0, startIdx);
+  if (!searchHandle) {
+    NSLog(@"[PdfView] 查找失败：无法创建搜索句柄");
+    FPDFText_ClosePage(textPage);
+    FPDF_ClosePage(page);
+    return NO;
+  }
+
+  // 查找下一个匹配
+  BOOL found = FPDFText_FindNext(searchHandle);
+  if (found) {
+    int resultIndex = FPDFText_GetSchResultIndex(searchHandle);
+    int resultCount = FPDFText_GetSchCount(searchHandle);
+    NSLog(@"[PdfView] 找到匹配文本，位置: %d，长度: %d", resultIndex,
+          resultCount);
+
+    // 获取匹配文本的边界框以便高亮显示
+    double left, top, right, bottom;
+    if (FPDFText_GetCharBox(textPage, resultIndex, &left, &bottom, &right,
+                            &top)) {
+      NSLog(@"[PdfView] 匹配文本边界: (%.1f, %.1f, %.1f, %.1f)", left, bottom,
+            right, top);
+
+      // 将PDF坐标转换为视图坐标并滚动到可见区域
+      NSPoint viewPoint = [self toViewFromPagePx:NSMakePoint(left, top)];
+      NSRect visibleRect =
+          NSMakeRect(viewPoint.x - 50, viewPoint.y - 50, 100, 100);
+      [self scrollRectToVisible:visibleRect];
+
+      // 标记需要重绘以显示高亮
+      [self setNeedsDisplay:YES];
+    }
+  } else {
+    NSLog(@"[PdfView] 未找到匹配的文本");
+  }
+
+  // 清理资源
+  FPDFText_FindClose(searchHandle);
+  FPDFText_ClosePage(textPage);
+  FPDF_ClosePage(page);
+
+  return found;
+}
+
+@end
