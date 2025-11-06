@@ -36,4 +36,6 @@
 - (BOOL)findText:(NSString*)searchText
        fromIndex:(NSNumber*)startIndex;  // 文本查找功能
 - (BOOL)exportCurrentPagePNG;            // 导出当前页为PNG
+- (double)zoom;                          // 获取当前缩放比例
+- (void)setZoom:(double)zoom;            // 设置缩放比例
 @end

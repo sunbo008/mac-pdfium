@@ -109,6 +109,19 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 - (int)currentPageIndex {
   return _pageIndex;
 }
+- (double)zoom {
+  return _zoom;
+}
+- (void)setZoom:(double)zoom {
+  // 限制缩放范围在 0.1 到 8.0 之间
+  _zoom = std::max(0.1, std::min(8.0, zoom));
+  [self updateViewSizeToFitPage];
+  [self setNeedsDisplay:YES];
+  // 通知 delegate 缩放已改变（如果需要更新状态栏）
+  if ([self.delegate respondsToSelector:@selector(pdfViewDidChangePage:)]) {
+    [self.delegate pdfViewDidChangePage:self];
+  }
+}
 - (void)goToPage:(int)index {
   if (!_doc) {
     return;

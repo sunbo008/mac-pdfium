@@ -15,11 +15,21 @@
 @property(nonatomic, strong) NSButton* prevPageButton;
 @property(nonatomic, strong) NSButton* nextPageButton;
 
+// 缩放控制相关属性
+@property(nonatomic, strong) NSButton* zoomOutButton;
+@property(nonatomic, strong) NSTextField* zoomInput;
+@property(nonatomic, strong) NSButton* zoomInButton;
+
 - (void)createStatusBar;
 - (void)updateStatusBar;
 - (void)onPrevPage:(id)sender;
 - (void)onNextPage:(id)sender;
 - (void)onPageInputChanged:(id)sender;
+
+// 缩放控制方法
+- (void)onZoomOut:(id)sender;
+- (void)onZoomIn:(id)sender;
+- (void)onZoomInputChanged:(id)sender;
 
 @end
 
