@@ -1263,6 +1263,103 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
 @end
 
+#pragma mark - NSSplitViewDelegate
+
+@implementation AppDelegate (SplitViewDelegate)
+
+- (void)splitView:(NSSplitView*)splitView
+    resizeSubviewsWithOldSize:(NSSize)oldSize {
+  // 获取分隔线的新尺寸
+  NSSize newSize = splitView.frame.size;
+  CGFloat dividerThickness = splitView.dividerThickness;
+
+  // 判断是主分割视图还是右侧分割视图
+  if (splitView == self.split) {
+    // 主分割视图：左侧书签面板 + 右侧内容面板
+    if (splitView.subviews.count >= 2) {
+      NSView* leftView = splitView.subviews[0];   // 左侧面板
+      NSView* rightView = splitView.subviews[1];  // 右侧面板
+
+      CGFloat leftWidth = leftView.frame.size.width;  // 保持左侧宽度不变
+
+      // 左侧面板保持原宽度
+      [leftView setFrame:NSMakeRect(0, 0, leftWidth, newSize.height)];
+
+      // 右侧面板占据剩余空间
+      CGFloat rightWidth = newSize.width - leftWidth - dividerThickness;
+      [rightView setFrame:NSMakeRect(leftWidth + dividerThickness, 0,
+                                     rightWidth, newSize.height)];
+
+      LOG_TAG_NS("SplitView",
+                 "主分割视图调整 - 左侧: %.0f, 右侧: %.0f, 总宽度: %.0f",
+                 leftWidth, rightWidth, newSize.width);
+    }
+  } else {
+    // 右侧分割视图：PDF内容 + 检查器面板
+    // 通过判断父视图是否为 rightPanel 来识别
+    if (splitView.superview == self.rightPanel &&
+        splitView.subviews.count >= 2) {
+      NSView* pdfView = splitView.subviews[0];        // PDF内容视图
+      NSView* inspectorView = splitView.subviews[1];  // 检查器面板
+
+      CGFloat inspectorWidth =
+          inspectorView.frame.size.width;  // 保持检查器宽度不变
+
+      // PDF内容视图占据剩余空间（可伸缩）
+      CGFloat pdfWidth = newSize.width - inspectorWidth - dividerThickness;
+      [pdfView setFrame:NSMakeRect(0, 0, pdfWidth, newSize.height)];
+
+      // 检查器面板保持原宽度
+      [inspectorView setFrame:NSMakeRect(pdfWidth + dividerThickness, 0,
+                                         inspectorWidth, newSize.height)];
+
+      LOG_TAG_NS("SplitView",
+                 "右侧分割视图调整 - PDF: %.0f, 检查器: %.0f, 总宽度: %.0f",
+                 pdfWidth, inspectorWidth, newSize.width);
+    }
+  }
+}
+
+- (BOOL)splitView:(NSSplitView*)splitView
+    shouldAdjustSizeOfSubview:(NSView*)view {
+  if (splitView == self.split) {
+    // 主分割视图：左侧面板（书签）不自动调整，右侧面板自动调整
+    return view == splitView.subviews[1];  // 只有右侧面板（索引1）可以自动调整
+  } else if (splitView.superview == self.rightPanel) {
+    // 右侧分割视图：检查器面板不自动调整，PDF内容可以调整
+    return view == splitView.subviews[0];  // 只有PDF内容（索引0）可以自动调整
+  }
+  return YES;  // 其他情况使用默认行为
+}
+
+- (CGFloat)splitView:(NSSplitView*)splitView
+    constrainMinCoordinate:(CGFloat)proposedMin
+               ofSubviewAt:(NSInteger)dividerIndex {
+  if (splitView == self.split) {
+    // 左侧面板最小宽度
+    return kBookmarkCollapsedWidth;
+  } else if (splitView.superview == self.rightPanel) {
+    // PDF内容最小宽度
+    return 300;
+  }
+  return proposedMin;
+}
+
+- (CGFloat)splitView:(NSSplitView*)splitView
+    constrainMaxCoordinate:(CGFloat)proposedMax
+               ofSubviewAt:(NSInteger)dividerIndex {
+  if (splitView == self.split) {
+    // 左侧面板最大宽度
+    return kBookmarkExpandedWidth + 40;  // 允许稍微超过默认展开宽度
+  } else if (splitView.superview == self.rightPanel) {
+    // PDF内容最大宽度（留给检查器至少100px）
+    return splitView.frame.size.width - 100;
+  }
+  return proposedMax;
+}
+
+@end
+
 int main(int argc, const char* argv[]) {
   @autoreleasepool {
     // ========== 清空旧的 debug.log 文件（MacLog 系统） ==========
