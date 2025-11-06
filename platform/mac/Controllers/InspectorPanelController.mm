@@ -1,10 +1,10 @@
 #import "InspectorPanelController.h"
-#import "../Views/SelectableTextView.h"
 #import "../Views/PdfView.h"
+#import "../Views/SelectableTextView.h"
 #include "platform/shared/pdfium_object_info.h"
+#include "public/fpdf_annot.h"
 #include "public/fpdf_doc.h"
 #include "public/fpdf_edit.h"
-#include "public/fpdf_annot.h"
 
 // 界面布局常量
 static const CGFloat kInspectorWidth = 300.0;
@@ -53,17 +53,6 @@ static const CGFloat kControlBarHeight = 30.0;
   titleLabel.editable = NO;
   titleLabel.selectable = NO;
   [titleBar addSubview:titleLabel];
-
-  // 添加收起按钮
-  NSButton* collapseButton = [[NSButton alloc]
-      initWithFrame:NSMakeRect(kInspectorWidth - 30, 5, 20, 20)];
-  collapseButton.title = @"◀";
-  collapseButton.font = [NSFont systemFontOfSize:10];
-  collapseButton.bordered = NO;
-  collapseButton.target = self;
-  collapseButton.action = @selector(toggleInspectorVisibility:);
-  collapseButton.autoresizingMask = NSViewMinXMargin;
-  [titleBar addSubview:collapseButton];
 
   // 添加底部分隔线
   NSView* separator =
@@ -145,8 +134,11 @@ static const CGFloat kControlBarHeight = 30.0;
   NSLog(@"[Inspector] 设置检查器可见性: %@", visible ? @"显示" : @"隐藏");
 
   // 更新按钮文本
-  // 检查器隐藏时显示◀（表示点击打开右侧窗口），检查器显示时显示▶（表示点击关闭右侧窗口）
+  // 检查器显示时显示▶（表示点击后向右收起），检查器隐藏时显示◀（表示点击后从右侧展开）
   self.inspectorToggleButton.title = visible ? @"▶" : @"◀";
+
+  // 更新按钮位置，确保按钮始终可见且可点击
+  [self updateInspectorButtonPosition:visible];
 
   // 获取右侧分割视图
   NSSplitView* rightSplit = (NSSplitView*)self.rightPanel.subviews.firstObject;
@@ -210,6 +202,32 @@ static const CGFloat kControlBarHeight = 30.0;
           NSStringFromRect(self.inspectorPanel.frame),
           NSStringFromRect(self.inspectorToggleButton.frame));
   }
+}
+
+// 更新按钮位置，确保按钮始终在正确的位置
+- (void)updateInspectorButtonPosition:(BOOL)visible {
+  if (!self.inspectorToggleButton || !self.rightPanel) {
+    return;
+  }
+
+  // 按钮应该始终在检测面板的左边缘（如果展开），或者在最右边（如果收起）
+  CGFloat buttonWidth = self.inspectorToggleButton.frame.size.width;
+  CGFloat buttonHeight = self.inspectorToggleButton.frame.size.height;
+  // 重新计算Y坐标，确保按钮垂直居中
+  CGFloat buttonY = (self.rightPanel.bounds.size.height - buttonHeight) / 2;
+  CGFloat scrollBarWidth = 15.0;
+
+  // 按钮X位置：始终固定在最右边（避开滚动条），不随检测面板展开/收起而移动
+  CGFloat buttonX =
+      self.rightPanel.bounds.size.width - buttonWidth - scrollBarWidth;
+
+  NSRect newFrame = NSMakeRect(buttonX, buttonY, buttonWidth, buttonHeight);
+  [self.inspectorToggleButton setFrame:newFrame];
+
+  NSLog(
+      @"[Inspector] 按钮位置已更新: frame=%@, rightPanel.bounds=%@, visible=%@",
+      NSStringFromRect(newFrame), NSStringFromRect(self.rightPanel.bounds),
+      visible ? @"YES" : @"NO");
 }
 
 - (void)updateInspectorLayout {
@@ -314,7 +332,8 @@ static const CGFloat kControlBarHeight = 30.0;
 }
 
 - (void)updateInspectorContent {
-  if (!self.inspectorVisible || !self.inspectorTextView || !self.appDelegate.view) {
+  if (!self.inspectorVisible || !self.inspectorTextView ||
+      !self.appDelegate.view) {
     return;
   }
 
@@ -530,4 +549,3 @@ static const CGFloat kControlBarHeight = 30.0;
 }
 
 @end
-

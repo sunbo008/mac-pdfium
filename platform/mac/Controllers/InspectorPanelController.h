@@ -22,6 +22,7 @@
 - (void)setInspectorVisible:(BOOL)visible animated:(BOOL)animated;
 - (void)updateInspectorLayout;
 - (void)updateInspectorContent;
+- (void)updateInspectorButtonPosition:(BOOL)visible;
 - (void)inspectorTextViewClicked:(id)sender;
 
 @end
