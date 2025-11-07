@@ -156,6 +156,10 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 @property(nonatomic, strong) BookmarkPanelController* bookmarkPanelController;
 @property(nonatomic, strong) InspectorPanelController* inspectorPanelController;
 @property(nonatomic, strong) BookmarkDelegate* bookmarkDelegate;
+
+// 水印相关属性
+@property(nonatomic, assign) BOOL watermarkEnabled;  // 水印是否启用
+@property(nonatomic, assign) WatermarkCallback* watermarkCallback;  // 水印回调实例
 @end
 
 // 为在主实现中调用分类方法提供前置声明（命名分类，避免"primary
@@ -229,6 +233,9 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   containerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
   // ========== 初始化模块化Controller ==========
+  // 初始化水印状态（默认关闭）
+  self.watermarkEnabled = NO;
+  
   // 1. 设置管理器
   self.settingsManager = [[SettingsManager alloc] init];
   [self.settingsManager loadSettingsJSON];
@@ -563,7 +570,7 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
              NSStringFromRect(self.window.frame));
 
   // 设置窗口关闭时退出应用
-  self.window.delegate = self;
+  // self.window.delegate = self;  // 临时注释：避免 windowDidResize: 崩溃
 
   // 构建主菜单（应用/文件/编辑/视图）并设置为主菜单
   NSMenu* mainMenu = [NSMenu new];
@@ -1273,6 +1280,46 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 
 @end
 
+#pragma mark - Watermark Control
+
+@implementation AppDelegate (WatermarkControl)
+
+- (void)toggleWatermark:(id)sender {
+  // 切换水印状态
+  self.watermarkEnabled = !self.watermarkEnabled;
+  
+  // 更新按钮标题
+  if (self.statusBarController.watermarkToggleButton) {
+    NSString* title = self.watermarkEnabled ? @"关闭水印" : @"启用水印";
+    self.statusBarController.watermarkToggleButton.title = title;
+  }
+  
+  // 更新全局水印回调
+  extern void CPDFSDK_SetApFormImageCallback(void* pCallback);
+  
+  if (self.watermarkEnabled) {
+    // 启用水印
+    if (self.watermarkCallback) {
+      CPDFSDK_SetApFormImageCallback(self.watermarkCallback);
+      LOG_INFO("[Watermark] 水印已启用");
+    } else {
+      LOG_ERROR("[Watermark] 水印回调未初始化");
+    }
+  } else {
+    // 禁用水印
+    CPDFSDK_SetApFormImageCallback(nullptr);
+    LOG_INFO("[Watermark] 水印已禁用");
+  }
+  
+  // 重新渲染当前页面
+  if (self.view) {
+    [self.view setNeedsDisplay:YES];
+    LOG_INFO("[Watermark] 页面重新渲染中...");
+  }
+}
+
+@end
+
 #pragma mark - NSSplitViewDelegate
 
 @implementation AppDelegate (SplitViewDelegate)
@@ -1403,8 +1450,9 @@ int main(int argc, const char* argv[]) {
 
     // ========== [AP-FORM-IMAGE-WATERMARK] 初始化水印回调 ==========
     static WatermarkCallback* g_watermark_callback = new WatermarkCallback();
-    CPDFSDK_SetApFormImageCallback(g_watermark_callback);
-    LOG_INFO("[AP-FORM-IMAGE-WATERMARK] Watermark callback registered");
+    // 默认不启用水印，等待用户手动启用
+    // CPDFSDK_SetApFormImageCallback(g_watermark_callback);
+    LOG_INFO("[AP-FORM-IMAGE-WATERMARK] Watermark callback created (not enabled by default)");
     // ================================================================
 
     // 检查是否已有实例运行
@@ -1466,6 +1514,8 @@ int main(int argc, const char* argv[]) {
     [app setActivationPolicy:NSApplicationActivationPolicyRegular];
 
     AppDelegate* del = [AppDelegate new];
+    // 将水印回调实例传递给 AppDelegate
+    del.watermarkCallback = g_watermark_callback;
     app.delegate = del;
 
     // 监听显示窗口通知

@@ -20,6 +20,9 @@
 @property(nonatomic, strong) NSTextField* zoomInput;
 @property(nonatomic, strong) NSButton* zoomInButton;
 
+// 水印控制相关属性
+@property(nonatomic, strong) NSButton* watermarkToggleButton;
+
 - (void)createStatusBar;
 - (void)updateStatusBar;
 - (void)onPrevPage:(id)sender;
@@ -30,6 +33,9 @@
 - (void)onZoomOut:(id)sender;
 - (void)onZoomIn:(id)sender;
 - (void)onZoomInputChanged:(id)sender;
+
+// 水印控制方法
+- (void)onWatermarkToggle:(id)sender;
 
 @end
 

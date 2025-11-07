@@ -155,6 +155,11 @@
   MacLog_SetEnabled(false);
   _gLogCtrl = nil;
 }
+
+- (void)windowDidResize:(NSNotification*)notification {
+  // 窗口调整大小时不需要特殊处理
+  // 留空即可，防止 unrecognized selector 崩溃
+}
 @end
 
 // 默认启用日志记录（性能日志总是记录到文件，窗口显示可选）

@@ -142,6 +142,17 @@
   self.zoomInButton.attributedTitle = [[NSAttributedString alloc] initWithString:@"+" attributes:attributes];
   [self.statusBar addSubview:self.zoomInButton];
 
+  // 水印切换按钮（放在最右边）
+  self.watermarkToggleButton =
+      [[NSButton alloc] initWithFrame:NSMakeRect(520, 5, 80, 20)];
+  self.watermarkToggleButton.bezelStyle = NSBezelStyleRounded;
+  self.watermarkToggleButton.title = @"启用水印";
+  self.watermarkToggleButton.font = [NSFont systemFontOfSize:11];
+  self.watermarkToggleButton.target = self;
+  self.watermarkToggleButton.action = @selector(onWatermarkToggle:);
+  self.watermarkToggleButton.autoresizingMask = NSViewMinXMargin;  // 靠右边距固定
+  [self.statusBar addSubview:self.watermarkToggleButton];
+
   LOG_TAG_NS("StatusBar", "状态栏创建完成，所有子视图已添加");
 }
 
@@ -311,6 +322,13 @@
   [self.appDelegate.view setZoom:zoom];
   LOG_TAG_NS("StatusBar", "状态栏缩放设置为: %.0f%%", zoom * 100);
   [self updateStatusBar];
+}
+
+- (void)onWatermarkToggle:(id)sender {
+  // 调用 AppDelegate 的水印切换方法
+  if ([self.appDelegate respondsToSelector:@selector(toggleWatermark:)]) {
+    [self.appDelegate performSelector:@selector(toggleWatermark:) withObject:sender];
+  }
 }
 
 @end
