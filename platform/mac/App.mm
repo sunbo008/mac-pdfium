@@ -569,8 +569,8 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   LOG_TAG_NS("Window", "窗口已显示，frame: %@",
              NSStringFromRect(self.window.frame));
 
-  // 设置窗口关闭时退出应用
-  // self.window.delegate = self;  // 临时注释：避免 windowDidResize: 崩溃
+  // 设置窗口delegate以处理窗口事件（如关闭、resize等）
+  self.window.delegate = self;
 
   // 构建主菜单（应用/文件/编辑/视图）并设置为主菜单
   NSMenu* mainMenu = [NSMenu new];
@@ -1162,6 +1162,17 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   // 启动异步加载，结果将通过 delegate 回调返回
   [self.view openPDFAtPath:path];
   // 注意：后续的UI更新逻辑已移至 pdfView:didFinishLoadingDocument:error: 回调
+}
+
+@end
+
+#pragma mark - NSWindowDelegate
+
+@implementation AppDelegate (WindowDelegate)
+
+- (void)windowDidResize:(NSNotification*)notification {
+  // 窗口大小改变时的处理
+  // 当前不需要特殊处理，留空以防止崩溃
 }
 
 @end

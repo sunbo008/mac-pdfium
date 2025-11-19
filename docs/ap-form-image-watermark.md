@@ -46,92 +46,60 @@ CPDF_ImageLoader (图片加载器)
 
 ## 完整加载流程
 
-### 流程图
+### 时序图
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  1. CPDF_Annot::DrawAppearance()                                │
-│     └─ 获取注释的外观表单                                         │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  2. CPDF_Annot::GetAPForm()                                     │
-│     └─ 返回 CPDF_Form (AP Stream)                               │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  3. CPDF_RenderContext::Render()                                │
-│     └─ 渲染表单中的所有对象                                       │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  4. CPDF_RenderStatus::ProcessImage()                           │
-│     └─ 处理表单中的图片对象                                       │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  5. CPDF_ImageRenderer::Start()                                 │
-│     └─ 启动图片渲染器                                            │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  6. CPDF_ImageLoader::Start()                                   │
-│     └─ 启动图片加载器                                            │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  7. CPDF_Image::StartLoadDIBBase()                              │
-│     └─ 开始加载设备无关位图                                       │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  8. CPDF_DIB::StartLoadDIBBase()                                │
-│     └─ 加载和解码图片流                                          │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  9. CPDF_DIB::LoadInternal() 【关键步骤】                        │
-│     └─ 读取 PDF 流数据                                           │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  10. CPDF_StreamAcc::LoadAllDataImageAcc() 【数据加载核心】      │
-│      └─ 从 PDF 流中读取并解压原始字节数据                         │
-│      └─ 存储到: stream_acc_->stream_data_ (DataVector<uint8_t>) │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  11. CPDF_DIB::CreateDecoder()                                  │
-│      └─ 根据编码类型创建解码器                                    │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-         ┌───────┴───────┐
-         ↓               ↓
-┌────────────────┐  ┌────────────────┐
-│  JPX/JBIG2     │  │  DCT/Flate等   │
-│  解码器         │  │  解码器         │
-│  ↓             │  │  ↓             │
-│  cached_       │  │  decoder_      │
-│  bitmap_       │  │  + line_buf_   │
-└────────────────┘  └────────────────┘
-         ↓               ↓
-         └───────┬───────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  12. CPDF_Image::dibbase_ (存储解码后的位图)                     │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  13. CPDF_ImageLoader::bitmap_ (DetachBitmap 转移所有权)        │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  14. CPDF_ImageRenderer::dibbase_ (传递给渲染器)                 │
-└────────────────┬────────────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  15. CFX_RenderDevice (渲染到设备)                               │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+sequenceDiagram
+    participant Annot as CPDF_Annot
+    participant Form as CPDF_Form<br/>(AP Stream)
+    participant Context as CPDF_RenderContext
+    participant Status as CPDF_RenderStatus
+    participant ImageRenderer as CPDF_ImageRenderer
+    participant ImageLoader as CPDF_ImageLoader
+    participant Image as CPDF_Image
+    participant DIB as CPDF_DIB
+    participant StreamAcc as CPDF_StreamAcc
+    participant Decoder as 解码器<br/>(JPX/JBIG2/DCT/Flate)
+    participant Device as CFX_RenderDevice
+
+    Annot->>Annot: DrawAppearance()<br/>获取注释的外观表单
+    Annot->>Form: GetAPForm()<br/>返回 CPDF_Form AP Stream
+    
+    Annot->>Context: Render()<br/>渲染表单中的所有对象
+    Context->>Status: ProcessImage()<br/>处理表单中的图片对象
+    
+    Status->>ImageRenderer: Start()<br/>启动图片渲染器
+    ImageRenderer->>ImageLoader: Start()<br/>启动图片加载器
+    
+    ImageLoader->>Image: StartLoadDIBBase()<br/>开始加载设备无关位图
+    Image->>DIB: StartLoadDIBBase()<br/>加载和解码图片流
+    
+    DIB->>DIB: LoadInternal()<br/>关键步骤：读取 PDF 流数据
+    Note over DIB: 读取图片尺寸、颜色空间等元数据
+    
+    DIB->>StreamAcc: LoadAllDataImageAcc()<br/>数据加载核心
+    Note over StreamAcc: 从 PDF 流中读取并解压原始字节数据<br/>存储到 stream_acc_->stream_data_
+    StreamAcc-->>DIB: 返回解压后的数据
+    
+    DIB->>DIB: CreateDecoder()<br/>根据编码类型创建解码器
+    
+    alt JPX/JBIG2 解码器
+        DIB->>Decoder: 创建完整位图解码器
+        Decoder->>Decoder: 一次性解码整个图片
+        Note over DIB: 存储到 cached_bitmap_
+    else DCT/Flate 等解码器
+        DIB->>Decoder: 创建逐行解码器
+        Note over DIB: 存储到 decoder_ + line_buf_<br/>按需逐行解码
+    end
+    
+    DIB-->>Image: 返回解码后的位图
+    Note over Image: 存储到 dibbase_
+    
+    Image->>ImageLoader: DetachBitmap()<br/>转移所有权
+    ImageLoader-->>ImageRenderer: bitmap_<br/>传递给渲染器
+    Note over ImageRenderer: 存储到 dibbase_
+    
+    ImageRenderer->>Device: 渲染位图<br/>渲染到设备
 ```
 
 ### 详细步骤说明
@@ -718,24 +686,26 @@ class CPDF_PageImageCache {
 
 ### 完整的数据流转路径
 
-```
-1. PDF 文件字节流 (磁盘)
-   ↓
-2. CPDF_Stream::data_ (内存 - 压缩数据)
-   ↓
-3. CPDF_StreamAcc::stream_data_ (内存 - 解压后的编码数据)
-   ↓
-4. 解码器处理
-   ├→ JPX/JBIG2: CPDF_DIB::cached_bitmap_::buffer_ (内存 - 完整像素数据)
-   └→ DCT/Flate: CPDF_DIB::line_buf_ (内存 - 单行像素数据，按需解码)
-   ↓
-5. CPDF_Image::dibbase_ (引用 CPDF_DIB)
-   ↓
-6. CPDF_ImageLoader::bitmap_ (std::move from dibbase_)
-   ↓
-7. CPDF_ImageRenderer::dibbase_ (引用 ImageLoader::bitmap_)
-   ↓
-8. CFX_RenderDevice (渲染到屏幕/打印设备)
+```mermaid
+flowchart TD
+    A["PDF 文件字节流<br/>磁盘"] --> B["CPDF_Stream::data_<br/>内存 - 压缩数据"]
+    B --> C["CPDF_StreamAcc::stream_data_<br/>内存 - 解压后的编码数据"]
+    C --> D{"解码器处理"}
+    D -->|JPX/JBIG2| E["CPDF_DIB::cached_bitmap_::buffer_<br/>内存 - 完整像素数据"]
+    D -->|DCT/Flate| F["CPDF_DIB::line_buf_<br/>内存 - 单行像素数据<br/>按需解码"]
+    E --> G["CPDF_Image::dibbase_<br/>引用 CPDF_DIB"]
+    F --> G
+    G --> H["CPDF_ImageLoader::bitmap_<br/>std::move from dibbase_"]
+    H --> I["CPDF_ImageRenderer::dibbase_<br/>引用 ImageLoader::bitmap_"]
+    I --> J["CFX_RenderDevice<br/>渲染到屏幕/打印设备"]
+    
+    style A fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style B fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    style C fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    style D fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style E fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    style F fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    style J fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
 ```
 
 ### 内存管理
@@ -1145,44 +1115,49 @@ bool CPDF_ImageRenderer::StartRenderDIBBase() {
 
 ### 完整调用链
 
-```
-应用启动 (main)
-    ↓ 注册回调
-CPDFSDK_SetApFormImageCallback(g_watermark_callback)
-    ↓ 保存到全局变量
-g_ap_form_image_callback = pCallback
-    ↓ 打开 PDF 文件
-CPDFSDK_RenderPageImpl()
-    ↓ 设置到渲染上下文
-CPDF_RenderContext::SetImageCallback(g_ap_form_image_callback)
-    ↓ 渐进式渲染器
-CPDF_ProgressiveRenderer::Continue()
-    ↓ 传播回调
-CPDF_RenderStatus::SetImageCallback(callback)
-    ↓ 处理表单对象
-CPDF_RenderStatus::ProcessForm()
-    ↓ 检测 ap-form 并传播
-status.SetImageCallback(image_callback_)
-status.SetInAppearanceForm(true)
-    ↓ 渲染图片对象
-CPDF_RenderStatus::RenderSingleObject()
-    ↓ 处理图片
-CPDF_RenderStatus::ProcessImage()
-    ↓ 创建图片渲染器
-CPDF_ImageRenderer(this)
-    ↓ 获取回调和标志
-image_callback_ = pStatus->GetImageCallback()
-in_appearance_form_ = pStatus->IsInAppearanceForm()
-    ↓ 开始渲染位图
-CPDF_ImageRenderer::StartRenderDIBBase()  ← 【关键调用点】
-    ↓ 检查条件并调用回调
-if (in_appearance_form_ && image_callback_) {
-  callback->OnImageRendering(...)  ← 【这里调用】
-}
-    ↓ 执行水印处理
-WatermarkCallback::OnImageRendering()
-    ↓ 返回处理后的位图
-return watermarked_bitmap
+```mermaid
+sequenceDiagram
+    participant App as 应用层<br/>(main)
+    participant SDK as CPDFSDK<br/>(全局变量)
+    participant Context as CPDF_RenderContext
+    participant Progressive as CPDF_ProgressiveRenderer
+    participant Status as CPDF_RenderStatus
+    participant ImageRenderer as CPDF_ImageRenderer
+    participant Callback as WatermarkCallback
+
+    App->>SDK: CPDFSDK_SetApFormImageCallback<br/>(注册回调)
+    Note over SDK: g_ap_form_image_callback<br/>= callback
+    
+    App->>Context: CPDFSDK_RenderPageImpl<br/>(打开 PDF 文件)
+    Context->>SDK: 获取全局回调
+    SDK-->>Context: g_ap_form_image_callback
+    Context->>Context: SetImageCallback<br/>(设置到渲染上下文)
+    
+    Context->>Progressive: Continue<br/>(渐进式渲染)
+    Progressive->>Context: GetImageCallback()
+    Context-->>Progressive: callback
+    Progressive->>Status: SetImageCallback(callback)<br/>(传播回调)
+    
+    Status->>Status: ProcessForm<br/>(处理表单对象)
+    Note over Status: 检测 ap-form<br/>is_annotation_form = true
+    Status->>Status: SetInAppearanceForm(true)
+    
+    Status->>Status: RenderSingleObject<br/>(渲染图片对象)
+    Status->>Status: ProcessImage<br/>(处理图片)
+    Status->>ImageRenderer: new CPDF_ImageRenderer(this)
+    Note over ImageRenderer: 构造函数获取<br/>image_callback_<br/>in_appearance_form_
+    
+    Status->>ImageRenderer: StartRenderDIBBase<br/>(开始渲染位图)
+    Note over ImageRenderer: 检查条件:<br/>in_appearance_form_ &&<br/>image_callback_
+    
+    alt 满足条件
+        ImageRenderer->>Callback: OnImageRendering<br/>(关键调用点)
+        Note over Callback: 执行水印处理
+        Callback-->>ImageRenderer: 返回处理后的位图
+        ImageRenderer->>ImageRenderer: 使用水印位图渲染
+    else 不满足条件
+        ImageRenderer->>ImageRenderer: 使用原始位图渲染
+    end
 ```
 
 ### 传播链路详解
@@ -1743,34 +1718,43 @@ render_status_->Initialize(nullptr, nullptr);
 
 #### 修复后的完整传播链
 
-```
-main()
-    ↓ 创建并注册回调
-g_ap_form_image_callback = new WatermarkCallback()
-    ↓
-RenderPageImpl()
-    ↓
-context_->SetImageCallback(g_ap_form_image_callback)
-    ↓
-CPDF_ProgressiveRenderer::Continue()
-    ↓ 创建 render_status_
-    ↓ ⭐ 从 context_ 获取回调并设置
-render_status_->SetImageCallback(callback)
-    ↓
-ProcessForm()
-    ↓ image_callback_ 现在有效 ✅
-    ↓ 传播到子 RenderStatus
-status.SetImageCallback(image_callback_)
-    ↓
-CPDF_ImageRenderer()
-    ↓ 构造函数获取回调
-image_callback_ = pStatus->GetImageCallback()
-    ↓
-StartRenderDIBBase()
-    ↓ 检查条件并调用
-if (in_appearance_form_ && image_callback_) {
-  callback->OnImageRendering(...)
-}
+```mermaid
+sequenceDiagram
+    participant Main as main
+    participant Global as 全局变量<br/>g_ap_form_image_callback
+    participant RenderPage as RenderPageImpl
+    participant Context as CPDF_RenderContext
+    participant Progressive as CPDF_ProgressiveRenderer
+    participant Status as CPDF_RenderStatus
+    participant ChildStatus as 子 RenderStatus
+    participant ImageRenderer as CPDF_ImageRenderer
+    participant Callback as WatermarkCallback
+
+    Main->>Global: new WatermarkCallback()<br/>创建并注册回调
+    Main->>RenderPage: RenderPageImpl()
+    RenderPage->>Global: 获取全局回调
+    Global-->>RenderPage: g_ap_form_image_callback
+    RenderPage->>Context: SetImageCallback<br/>(设置到渲染上下文)
+    
+    RenderPage->>Progressive: Continue()<br/>创建 render_status_
+    Note over Progressive: ⭐ 修复关键步骤
+    Progressive->>Context: GetImageCallback()
+    Context-->>Progressive: callback
+    Progressive->>Status: SetImageCallback(callback)<br/>(传播回调)
+    Note over Status: ✅ image_callback_ 现在有效
+    
+    Status->>Status: ProcessForm()
+    Status->>ChildStatus: SetImageCallback(image_callback_)<br/>传播到子 RenderStatus
+    Status->>ChildStatus: SetInAppearanceForm(true)
+    
+    ChildStatus->>ImageRenderer: new CPDF_ImageRenderer(this)
+    Note over ImageRenderer: 构造函数获取<br/>image_callback_<br/>in_appearance_form_
+    
+    ChildStatus->>ImageRenderer: StartRenderDIBBase()
+    Note over ImageRenderer: 检查条件:<br/>in_appearance_form_ &&<br/>image_callback_
+    
+    ImageRenderer->>Callback: OnImageRendering()<br/>✅ 成功调用
+    Callback-->>ImageRenderer: 返回处理后的位图
 ```
 
 #### 修复验证
