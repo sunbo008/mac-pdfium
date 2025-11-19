@@ -12,6 +12,13 @@ Instructions for AI coding assistants using OpenSpec for spec-driven development
 - Validate: `openspec validate [change-id] --strict` and fix issues
 - Request approval: Do not start implementation until proposal is approved
 
+## Quality Resources
+
+**Before starting any work, review these resources:**
+- `AI_IMPLEMENTATION_CHECKLIST.md` - Self-check list for AI during implementation
+- `templates/task_with_acceptance.md` - How to write good tasks with acceptance criteria
+- `OPENSPEC_IMPROVEMENT_PROPOSAL.md` - Lessons learned and best practices
+
 ## Three-Stage Workflow
 
 ### Stage 1: Creating Changes
@@ -47,14 +54,24 @@ Skip proposal for:
 4. Run `openspec validate <id> --strict` and resolve any issues before sharing the proposal.
 
 ### Stage 2: Implementing Changes
+**CRITICAL: Review `AI_IMPLEMENTATION_CHECKLIST.md` before starting!**
+
 Track these steps as TODOs and complete them one by one.
 1. **Read proposal.md** - Understand what's being built
 2. **Read design.md** (if exists) - Review technical decisions
 3. **Read tasks.md** - Get implementation checklist
-4. **Implement tasks sequentially** - Complete in order
-5. **Confirm completion** - Ensure every item in `tasks.md` is finished before updating statuses
-6. **Update checklist** - After all work is done, set every task to `- [x]` so the list reflects reality
-7. **Approval gate** - Do not start implementation until the proposal is reviewed and approved
+4. **Validate task quality** - Check if tasks have clear acceptance criteria
+5. **Implement tasks sequentially** - Complete in order
+6. **Verify each task** - Check acceptance criteria, run tests, verify logs
+7. **Mark complete only when verified** - Not "close enough", must fully satisfy acceptance
+8. **Update checklist** - After all work is done, set every task to `- [x]`
+9. **Approval gate** - Do not start implementation until the proposal is reviewed and approved
+
+**Key Principle: Acceptance-Driven Implementation**
+- Before coding: Understand how to verify completion
+- While coding: Keep verification in mind
+- After coding: Actually verify (compile, test, check logs)
+- Only then: Mark task complete
 
 ### Stage 3: Archiving Changes
 After deployment, create separate PR to:

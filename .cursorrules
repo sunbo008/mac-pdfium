@@ -1,0 +1,12 @@
+# Cursor AI Rules for mac-pdfium Project
+
+## Markdown File Formatting
+- When generating or editing any Markdown (.md) files, ensure the file ends with EXACTLY ONE newline character (\n)
+- NEVER use multiple consecutive newlines (\n\n or more) at the end of files
+- This is critical for MD extension compatibility
+- Applies to all .md and .markdown files
+
+## File Ending Standard
+- All text files should end with a single newline character (POSIX standard)
+- Use `\n` not `\n\n` when writing file contents
+
