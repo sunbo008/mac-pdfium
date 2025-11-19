@@ -23,6 +23,9 @@
 // 水印控制相关属性
 @property(nonatomic, strong) NSButton* watermarkToggleButton;
 
+// [AP-FORM-IMAGE-REPLACEMENT] 图片替换控制相关属性
+@property(nonatomic, strong) NSButton* imageReplacementButton;
+
 - (void)createStatusBar;
 - (void)updateStatusBar;
 - (void)onPrevPage:(id)sender;
@@ -36,6 +39,9 @@
 
 // 水印控制方法
 - (void)onWatermarkToggle:(id)sender;
+
+// [AP-FORM-IMAGE-REPLACEMENT] 图片替换控制方法
+- (void)onImageReplacement:(id)sender;
 
 @end
 

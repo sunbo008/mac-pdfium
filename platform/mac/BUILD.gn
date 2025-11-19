@@ -19,6 +19,10 @@ if (is_mac) {
       "LoggerHelper.mm",
       "LoggerHelper.h",
       
+      # [AP-FORM-IMAGE-REPLACEMENT] 自定义图片替换回调
+      "CustomImageCallback.h",
+      "CustomImageCallback.mm",
+      
       # Utils
       "Utils/LogManager.h",
       "Utils/LogManager.mm",

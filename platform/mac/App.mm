@@ -13,6 +13,7 @@
 #include "../shared/pdf_utils.h"
 #include "../shared/pdfium_object_info.h"
 #include "../shared/watermark_callback.h"  // [AP-FORM-IMAGE-WATERMARK]
+#include "CustomImageCallback.h"           // [AP-FORM-IMAGE-REPLACEMENT]
 #include "fpdfsdk/cpdfsdk_renderpage.h"    // [AP-FORM-IMAGE-WATERMARK]
 #include "public/fpdf_annot.h"
 #include "public/fpdf_doc.h"
@@ -160,6 +161,10 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
 // 水印相关属性
 @property(nonatomic, assign) BOOL watermarkEnabled;  // 水印是否启用
 @property(nonatomic, assign) WatermarkCallback* watermarkCallback;  // 水印回调实例
+
+// [AP-FORM-IMAGE-REPLACEMENT] 图片替换相关属性
+@property(nonatomic, assign) CustomImageCallback* imageCallback;  // 图片替换回调实例
+@property(nonatomic, assign) BOOL imageReplacementEnabled;  // 图片替换是否启用
 @end
 
 // 为在主实现中调用分类方法提供前置声明（命名分类，避免"primary
@@ -1299,6 +1304,12 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   // 切换水印状态
   self.watermarkEnabled = !self.watermarkEnabled;
   
+  // [FIX] 同步开关状态到 callback
+  if (self.imageCallback) {
+    self.imageCallback->SetWatermarkEnabled(self.watermarkEnabled);
+    LOG_INFO_F("[Watermark] Switch set to: %s", self.watermarkEnabled ? "ON" : "OFF");
+  }
+  
   // 更新按钮标题
   if (self.statusBarController.watermarkToggleButton) {
     NSString* title = self.watermarkEnabled ? @"关闭水印" : @"启用水印";
@@ -1317,15 +1328,176 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
       LOG_ERROR("[Watermark] 水印回调未初始化");
     }
   } else {
-    // 禁用水印
-    CPDFSDK_SetApFormImageCallback(nullptr);
-    LOG_INFO("[Watermark] 水印已禁用");
+    // 禁用水印（如果没有启用图片替换）
+    if (!self.imageReplacementEnabled) {
+      CPDFSDK_SetApFormImageCallback(nullptr);
+      LOG_INFO("[Watermark] 水印已禁用，callback 已清除");
+    } else {
+      LOG_INFO("[Watermark] 水印已禁用，但保留 callback（图片替换仍在使用）");
+    }
   }
   
   // 重新渲染当前页面
   if (self.view) {
     [self.view setNeedsDisplay:YES];
     LOG_INFO("[Watermark] 页面重新渲染中...");
+  }
+}
+
+@end
+
+#pragma mark - Image Replacement Control
+
+@implementation AppDelegate (ImageReplacementControl)
+
+- (void)selectReplacementImage:(id)sender {
+  // 如果已启用替换，则清除；否则选择新图片
+  if (self.imageReplacementEnabled) {
+    [self clearImageReplacement];
+    return;
+  }
+  
+  // [DEBUG] 添加测试路径选项
+  NSEventModifierFlags flags = [NSEvent modifierFlags];
+  if (flags & NSEventModifierFlagOption) {
+    // 按住 Option 键时使用测试路径
+    const char* test_path = "/Volumes/Lzf-MoveDisk/图片/ymhd.png";
+    LOG_INFO_F("[ImageReplacement] [DEBUG] 使用测试路径: %s", test_path);
+    
+    if (self.imageCallback) {
+      // [FIX] 必须先设置模式
+      self.imageCallback->SetReplacementMode(CustomImageCallback::ReplacementMode::kGlobal);
+      
+      if (self.imageCallback->LoadReplacementImageFromFile(test_path)) {
+        LOG_INFO("[ImageReplacement] [DEBUG] 测试路径加载成功！");
+        self.imageReplacementEnabled = YES;
+        
+        // [FIX] 设置开关状态
+        self.imageCallback->SetReplacementEnabled(true);
+        LOG_INFO("[ImageReplacement] [DEBUG] Replacement switch enabled");
+        
+        // [FIX] 设置全局回调
+        extern void CPDFSDK_SetApFormImageCallback(void* pCallback);
+        CPDFSDK_SetApFormImageCallback(self.imageCallback);
+        LOG_INFO("[ImageReplacement] [DEBUG] PDFium callback 已设置");
+        
+        if (self.statusBarController.imageReplacementButton) {
+          self.statusBarController.imageReplacementButton.title = @"清除替换";
+        }
+        if (self.view) {
+          [self.view setNeedsDisplay:YES];
+        }
+      } else {
+        LOG_ERROR("[ImageReplacement] [DEBUG] 测试路径加载失败！");
+        NSAlert* alert = [[NSAlert alloc] init];
+        alert.messageText = @"[DEBUG] 测试失败";
+        alert.informativeText = @"请查看控制台日志";
+        alert.alertStyle = NSAlertStyleWarning;
+        [alert addButtonWithTitle:@"确定"];
+        [alert runModal];
+      }
+    }
+    return;
+  }
+  
+  // 打开文件选择对话框
+  NSOpenPanel* panel = [NSOpenPanel openPanel];
+  panel.title = @"选择替换图片";
+  panel.message = @"选择一张图片用于替换 AP-Form 中的图片\n\n提示：按住 Option 键点击此按钮可测试固定路径";
+  panel.allowedContentTypes = @[
+    [UTType typeWithFilenameExtension:@"png"],
+    [UTType typeWithFilenameExtension:@"jpg"],
+    [UTType typeWithFilenameExtension:@"jpeg"]
+  ];
+  panel.allowsMultipleSelection = NO;
+  panel.canChooseDirectories = NO;
+  
+  [panel beginSheetModalForWindow:self.window completionHandler:^(NSInteger result) {
+    if (result == NSModalResponseOK) {
+      NSURL* url = panel.URL;
+      if (url && url.isFileURL) {
+        const char* path = [url.path UTF8String];
+        LOG_INFO_F("[ImageReplacement] 用户选择了图片: %s", path);
+        
+        // 加载图片并设置为全局替换
+        if (self.imageCallback) {
+          // [FIX] 必须先设置模式，LoadReplacementImageFromFile 才会保存图片
+          self.imageCallback->SetReplacementMode(CustomImageCallback::ReplacementMode::kGlobal);
+          
+          if (self.imageCallback->LoadReplacementImageFromFile(path)) {
+            LOG_INFO_F("[ImageReplacement] 图片加载成功，启用全局替换");
+            self.imageReplacementEnabled = YES;
+            
+            // [FIX] 设置开关状态
+            self.imageCallback->SetReplacementEnabled(true);
+            LOG_INFO("[ImageReplacement] Replacement switch enabled");
+            
+            // [FIX] 设置全局回调，让 PDFium 能够使用
+            extern void CPDFSDK_SetApFormImageCallback(void* pCallback);
+            CPDFSDK_SetApFormImageCallback(self.imageCallback);
+            LOG_INFO("[ImageReplacement] PDFium callback 已设置");
+            
+            // 更新按钮标题
+            if (self.statusBarController.imageReplacementButton) {
+              self.statusBarController.imageReplacementButton.title = @"清除替换";
+            }
+            
+            // 重新渲染页面
+            if (self.view) {
+              [self.view setNeedsDisplay:YES];
+              LOG_INFO("[ImageReplacement] 页面重新渲染中...");
+            }
+          } else {
+            LOG_ERROR_F("[ImageReplacement] 图片加载失败: %s", path);
+            
+            // 显示错误
+            NSAlert* alert = [[NSAlert alloc] init];
+            alert.messageText = @"图片加载失败";
+            alert.informativeText = @"无法加载选择的图片，请确保文件格式正确（支持 PNG/JPG）";
+            alert.alertStyle = NSAlertStyleWarning;
+            [alert addButtonWithTitle:@"确定"];
+            [alert beginSheetModalForWindow:self.window completionHandler:nil];
+          }
+        } else {
+          LOG_ERROR("[ImageReplacement] imageCallback 未初始化");
+        }
+      }
+    } else {
+      LOG_INFO("[ImageReplacement] 用户取消了图片选择");
+    }
+  }];
+}
+
+- (void)clearImageReplacement {
+  if (self.imageCallback) {
+    // 设置为不替换模式
+    self.imageCallback->SetReplacementMode(CustomImageCallback::ReplacementMode::kNone);
+    self.imageCallback->SetReplacementEnabled(false);
+    self.imageReplacementEnabled = NO;
+    LOG_INFO("[ImageReplacement] Replacement switch disabled");
+    
+    // [FIX] 清除全局回调（如果没有启用水印）
+    extern void CPDFSDK_SetApFormImageCallback(void* pCallback);
+    if (!self.watermarkEnabled) {
+      CPDFSDK_SetApFormImageCallback(nullptr);
+      LOG_INFO("[ImageReplacement] PDFium callback 已清除");
+    } else {
+      // 如果水印还在用，就保持 callback（因为是同一个对象）
+      LOG_INFO("[ImageReplacement] 保留 callback (水印仍在使用)");
+    }
+    
+    // 更新按钮标题
+    if (self.statusBarController.imageReplacementButton) {
+      self.statusBarController.imageReplacementButton.title = @"选择替换图片";
+    }
+    
+    LOG_INFO("[ImageReplacement] 图片替换已清除");
+    
+    // 重新渲染页面
+    if (self.view) {
+      [self.view setNeedsDisplay:YES];
+      LOG_INFO("[ImageReplacement] 页面重新渲染中...");
+    }
   }
 }
 
@@ -1459,11 +1631,13 @@ int main(int argc, const char* argv[]) {
     LOG_INFO_F("Executable: %s", app_path.c_str());
     LOG_INFO("========================================");
 
-    // ========== [AP-FORM-IMAGE-WATERMARK] 初始化水印回调 ==========
-    static WatermarkCallback* g_watermark_callback = new WatermarkCallback();
-    // 默认不启用水印，等待用户手动启用
-    // CPDFSDK_SetApFormImageCallback(g_watermark_callback);
-    LOG_INFO("[AP-FORM-IMAGE-WATERMARK] Watermark callback created (not enabled by default)");
+    // ========== [AP-FORM-IMAGE-REPLACEMENT] 初始化图片替换回调 ==========
+    // 使用 CustomImageCallback 替代原来的 WatermarkCallback
+    // CustomImageCallback 继承自 WatermarkCallback，支持图片替换和水印
+    static CustomImageCallback* g_image_callback = new CustomImageCallback();
+    // 默认模式：不替换图片，也不启用水印
+    g_image_callback->SetReplacementMode(CustomImageCallback::ReplacementMode::kNone);
+    LOG_INFO("[AP-FORM-IMAGE-REPLACEMENT] CustomImageCallback created (replacement disabled by default)");
     // ================================================================
 
     // 检查是否已有实例运行
@@ -1525,8 +1699,11 @@ int main(int argc, const char* argv[]) {
     [app setActivationPolicy:NSApplicationActivationPolicyRegular];
 
     AppDelegate* del = [AppDelegate new];
-    // 将水印回调实例传递给 AppDelegate
-    del.watermarkCallback = g_watermark_callback;
+    // 将图片替换回调实例传递给 AppDelegate
+    // CustomImageCallback 继承自 WatermarkCallback，可以同时处理水印和替换
+    del.watermarkCallback = g_image_callback;  // 保留原有的水印callback属性
+    del.imageCallback = g_image_callback;      // 新增的图片替换callback属性
+    del.imageReplacementEnabled = NO;          // 初始状态：未启用替换
     app.delegate = del;
 
     // 监听显示窗口通知

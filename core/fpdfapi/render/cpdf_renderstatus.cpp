@@ -78,6 +78,14 @@
 #include "core/fpdfapi/render/cpdf_scaledrenderbuffer.h"
 #endif
 
+// [AP-FORM-IMAGE-REPLACEMENT] 默认实现：不替换图片
+RetainPtr<CFX_DIBitmap> CPDF_RenderStatus::ImageCallbackIface::GetReplacementImage(
+    CPDF_ImageObject* pImageObj,
+    const CFX_Matrix& mtObj2Device,
+    RetainPtr<CFX_DIBitmap> pOriginalBitmap) {
+  return nullptr;  // 默认实现：不替换
+}
+
 namespace {
 
 constexpr int kRenderMaxRecursionDepth = 64;

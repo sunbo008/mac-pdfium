@@ -142,7 +142,7 @@
   self.zoomInButton.attributedTitle = [[NSAttributedString alloc] initWithString:@"+" attributes:attributes];
   [self.statusBar addSubview:self.zoomInButton];
 
-  // 水印切换按钮（放在最右边）
+  // 水印切换按钮
   self.watermarkToggleButton =
       [[NSButton alloc] initWithFrame:NSMakeRect(520, 5, 80, 20)];
   self.watermarkToggleButton.bezelStyle = NSBezelStyleRounded;
@@ -152,6 +152,17 @@
   self.watermarkToggleButton.action = @selector(onWatermarkToggle:);
   self.watermarkToggleButton.autoresizingMask = NSViewMinXMargin;  // 靠右边距固定
   [self.statusBar addSubview:self.watermarkToggleButton];
+
+  // [AP-FORM-IMAGE-REPLACEMENT] 图片替换按钮（放在水印按钮右边）
+  self.imageReplacementButton =
+      [[NSButton alloc] initWithFrame:NSMakeRect(610, 5, 100, 20)];
+  self.imageReplacementButton.bezelStyle = NSBezelStyleRounded;
+  self.imageReplacementButton.title = @"选择替换图片";
+  self.imageReplacementButton.font = [NSFont systemFontOfSize:11];
+  self.imageReplacementButton.target = self;
+  self.imageReplacementButton.action = @selector(onImageReplacement:);
+  self.imageReplacementButton.autoresizingMask = NSViewMinXMargin;  // 靠右边距固定
+  [self.statusBar addSubview:self.imageReplacementButton];
 
   LOG_TAG_NS("StatusBar", "状态栏创建完成，所有子视图已添加");
 }
@@ -328,6 +339,14 @@
   // 调用 AppDelegate 的水印切换方法
   if ([self.appDelegate respondsToSelector:@selector(toggleWatermark:)]) {
     [self.appDelegate performSelector:@selector(toggleWatermark:) withObject:sender];
+  }
+}
+
+// [AP-FORM-IMAGE-REPLACEMENT] 图片替换按钮响应
+- (void)onImageReplacement:(id)sender {
+  // 调用 AppDelegate 的图片替换方法
+  if ([self.appDelegate respondsToSelector:@selector(selectReplacementImage:)]) {
+    [self.appDelegate performSelector:@selector(selectReplacementImage:) withObject:sender];
   }
 }
 

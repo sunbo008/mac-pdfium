@@ -50,7 +50,16 @@ class CPDF_RenderStatus {
    public:
     virtual ~ImageCallbackIface() = default;
     
-    // 在 ap-form 中渲染图片时调用
+    // [AP-FORM-IMAGE-REPLACEMENT] 获取替换图片
+    // 在图片加载后、渲染前调用，用于临时替换位图
+    // 返回 nullptr 表示使用原图，返回非空表示使用替换图片
+    // 注意：PDFium 会创建返回图片的内部副本，外部可以在回调返回后立即释放
+    virtual RetainPtr<CFX_DIBitmap> GetReplacementImage(
+        CPDF_ImageObject* pImageObj,
+        const CFX_Matrix& mtObj2Device,
+        RetainPtr<CFX_DIBitmap> pOriginalBitmap);
+    
+    // 在 ap-form 中渲染图片时调用（用于叠加水印）
     // 返回处理后的位图，返回 nullptr 表示使用原始位图
     virtual RetainPtr<CFX_DIBitmap> OnImageRendering(
         CPDF_ImageObject* pImageObj,

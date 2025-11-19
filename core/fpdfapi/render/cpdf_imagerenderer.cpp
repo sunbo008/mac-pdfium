@@ -105,37 +105,58 @@ bool CPDF_ImageRenderer::StartRenderDIBBase() {
   alpha_ = state.GetFillAlpha();
   dibbase_ = loader_->GetBitmap();
 
-  // [AP-FORM-IMAGE-WATERMARK] 调试：输出关键变量状态
+  // [AP-FORM-IMAGE-REPLACEMENT] 图片替换和水印处理
   LOG_DEBUG_F(
-      "[AP-FORM-IMAGE-WATERMARK] Image render check: in_appearance_form_=%s, "
+      "[AP-FORM-IMAGE-REPLACEMENT] Image render check: in_appearance_form_=%s, "
       "image_callback_=%s",
       (in_appearance_form_ ? "true" : "false"),
       (image_callback_ ? "valid" : "null"));
 
-  // [AP-FORM-IMAGE-WATERMARK] 在 ap-form 中且回调存在时调用
   if (in_appearance_form_ && image_callback_) {
-    // 将 dibbase_ 转换为 CFX_DIBitmap
     RetainPtr<CFX_DIBitmap> bitmap = dibbase_->Realize();
-
+    
     if (bitmap) {
-      int width = bitmap->GetWidth();
-      int height = bitmap->GetHeight();
-      LOG_INFO_F(
-          "[AP-FORM-IMAGE-WATERMARK] Calling image callback for image %dx%d",
-          width, height);
-
-      // 将 void* 转回正确的类型并调用
       auto* callback =
           static_cast<CPDF_RenderStatus::ImageCallbackIface*>(image_callback_);
-      RetainPtr<CFX_DIBitmap> processed =
+      
+      // [AP-FORM-IMAGE-REPLACEMENT] 步骤1: 尝试获取替换图片
+      RetainPtr<CFX_DIBitmap> replacement =
+          callback->GetReplacementImage(image_object_, obj_to_device_, bitmap);
+      
+              if (replacement) {
+                LOG_INFO_F(
+                    "[AP-FORM-IMAGE-REPLACEMENT] Got replacement image %dx%d (original: %dx%d)",
+                    replacement->GetWidth(), replacement->GetHeight(),
+                    bitmap->GetWidth(), bitmap->GetHeight());
+                
+                // 创建内部副本，不依赖外部数据
+                // 注意：Copy() 内部会自动调用 Create()，所以不需要先 Create()
+                RetainPtr<CFX_DIBitmap> internal_copy = pdfium::MakeRetain<CFX_DIBitmap>();
+                if (internal_copy->Copy(replacement)) {
+                  LOG_INFO_F(
+                      "[AP-FORM-IMAGE-REPLACEMENT] Created internal copy at %p, size %dx%d",
+                      internal_copy.Get(), internal_copy->GetWidth(), 
+                      internal_copy->GetHeight());
+                  dibbase_ = internal_copy;
+                  bitmap = internal_copy;  // 后续水印处理使用替换后的图片
+                } else {
+                  LOG_WARNING_F(
+                      "[AP-FORM-IMAGE-REPLACEMENT] Failed to copy replacement image, "
+                      "using original");
+                }
+              } else {
+        LOG_DEBUG_F(
+            "[AP-FORM-IMAGE-REPLACEMENT] No replacement image, using original %dx%d",
+            bitmap->GetWidth(), bitmap->GetHeight());
+      }
+      
+      // [AP-FORM-IMAGE-WATERMARK] 步骤2: 叠加水印（在替换后的图片上）
+      RetainPtr<CFX_DIBitmap> watermarked =
           callback->OnImageRendering(image_object_, obj_to_device_, bitmap);
-
-      if (processed) {
-        LOG_INFO_F("[AP-FORM-IMAGE-WATERMARK] Using watermarked bitmap");
-        dibbase_ = processed;
-      } else {
-        LOG_INFO_F(
-            "[AP-FORM-IMAGE-WATERMARK] Callback returned null, using original");
+      
+      if (watermarked) {
+        LOG_INFO_F("[AP-FORM-IMAGE-WATERMARK] Applied watermark");
+        dibbase_ = watermarked;
       }
     }
   }

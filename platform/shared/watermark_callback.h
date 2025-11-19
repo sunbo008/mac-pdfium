@@ -25,11 +25,29 @@ class WatermarkCallback : public CPDF_RenderStatus::ImageCallbackIface {
   ~WatermarkCallback() override;
   
   // ImageCallbackIface 实现
+  
+  // [AP-FORM-IMAGE-REPLACEMENT] 获取替换图片
+  // 默认实现返回 nullptr（不替换）
+  // 应用层可以继承此类并重写此方法以提供实际的替换逻辑
+  RetainPtr<CFX_DIBitmap> GetReplacementImage(
+      CPDF_ImageObject* pImageObj,
+      const CFX_Matrix& mtObj2Device,
+      RetainPtr<CFX_DIBitmap> pOriginalBitmap) override;
+  
+  // [AP-FORM-IMAGE-WATERMARK] 叠加水印
   RetainPtr<CFX_DIBitmap> OnImageRendering(
       CPDF_ImageObject* pImageObj,
       const CFX_Matrix& mtObj2Device,
       RetainPtr<CFX_DIBitmap> pOriginalBitmap) override;
       
+ protected:
+  // [AP-FORM-IMAGE-REPLACEMENT] 子类可以使用的辅助方法
+  // 使用 PDFium 解码器解码图片文件
+  RetainPtr<CFX_DIBitmap> DecodeImageFile(const std::vector<uint8_t>& file_data);
+  
+  // 从文件读取数据
+  static std::vector<uint8_t> ReadFileData(const char* path);
+  
  private:
   RetainPtr<CFX_DIBitmap> watermark_bitmap_;  // 水印位图
   int image_counter_ = 0;  // 用于生成唯一文件名
@@ -39,18 +57,12 @@ class WatermarkCallback : public CPDF_RenderStatus::ImageCallbackIface {
   // 加载水印图片（使用 PDFium 的图片解码器）
   bool LoadWatermarkImage(const char* path);
   
-  // 使用 PDFium 解码器解码图片文件
-  RetainPtr<CFX_DIBitmap> DecodeImageFile(const std::vector<uint8_t>& file_data);
-  
   // 应用水印到位图（左上角 1/3 位置）
   bool ApplyWatermark(CFX_DIBitmap* target_bitmap,
                      const CFX_DIBitmap* watermark);
   
   // 保存位图到文件（PNG 格式）
   bool SaveBitmapToFile(CFX_DIBitmap* bitmap, const std::string& filename);
-  
-  // 从文件读取数据
-  static std::vector<uint8_t> ReadFileData(const char* path);
   
   // 获取应用资源目录路径
   static std::string GetResourcePath();
