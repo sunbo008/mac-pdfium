@@ -461,6 +461,12 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
   // 创建PDF视图
   self.view = [[PdfView alloc] initWithFrame:NSMakeRect(0, 0, 800, 600)];
   self.view.delegate = self;
+  
+  // [FIX-COLOR-MISMATCH] 将PDF视图背景色设置为与外层容器一致的深灰色(0.16)，
+  // 消除PDF区域(红色框)与背景区域(蓝色框)之间的颜色差异
+  if ([self.view respondsToSelector:@selector(setBackgroundColor:)]) {
+    [self.view setBackgroundColor:pdfBackdropColor];
+  }
 
   // 现在PdfView已创建，设置需要它的Controller
   self.statusBarController.pdfView = self.view;

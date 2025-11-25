@@ -164,9 +164,17 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
     _shouldCancelLoading = NO;
     _loadingQueue = dispatch_queue_create("com.pdfwinviewer.loading",
                                           DISPATCH_QUEUE_SERIAL);
+    // [FIX-COLOR-MISMATCH] 初始化默认背景色为系统窗口背景色
+    _backgroundColor = [NSColor windowBackgroundColor];
     [self.window setAcceptsMouseMovedEvents:YES];
   }
   return self;
+}
+
+// [FIX-COLOR-MISMATCH] 设置背景颜色并触发重绘，用于外部控制器统一颜色风格
+- (void)setBackgroundColor:(NSColor*)backgroundColor {
+  _backgroundColor = backgroundColor;
+  [self setNeedsDisplay:YES];
 }
 
 - (void)dealloc {
@@ -689,8 +697,11 @@ static inline std::string NSStringToUTF8(NSObject* obj) {
                                  _pageIndex]);
 
   [super drawRect:dirtyRect];
-  [[NSColor windowBackgroundColor] setFill];
-  NSRectFill(self.bounds);
+  // [FIX-COLOR-MISMATCH] 优先使用自定义背景色填充，确保与滚动容器颜色一致
+  if (self.backgroundColor) {
+    [self.backgroundColor setFill];
+    NSRectFill(self.bounds);
+  }
   if (!_doc) {
     MacLog_DebugNS(@"[PdfView] drawRect: _doc is NULL, returning");
     return;

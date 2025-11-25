@@ -23,6 +23,8 @@
 @interface PdfView : NSView
 @property(nonatomic, assign) id<PdfViewDelegate> delegate;
 @property(nonatomic, readonly) NSString* currentPath;  // 当前打开的文件路径
+// [FIX-COLOR-MISMATCH] 背景颜色属性，用于与父容器颜色保持一致，消除视觉割裂感
+@property(nonatomic, strong) NSColor* backgroundColor; 
 - (BOOL)openPDFAtPath:(NSString*)path;
 - (BOOL)openPDFAtPath:(NSString*)path
       showLoadingView:(BOOL)showLoading;  // 异步加载，可控制是否显示加载视图
